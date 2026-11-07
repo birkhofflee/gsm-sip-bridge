@@ -52,7 +52,7 @@ the one-time modem setup.
   PBX with the caller's number. Outbound calling is opt-in.
 - **HD voice over VoWiFi.** Wideband audio (AMR-WB in, G.722 out) stays
   wideband end to end.
-- **SMS** on every path, stored locally and optionally posted to Discord.
+- **SMS** on every path, stored locally and optionally posted to Discord or Telegram.
 - **A read-only web UI** for line health, call history and messages. It also
   shows one-time codes with a copy button.
 - **Alerts** to Discord when a line drops or recovers, plus Prometheus

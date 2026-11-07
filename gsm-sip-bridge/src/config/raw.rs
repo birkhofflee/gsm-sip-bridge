@@ -145,6 +145,8 @@ section! {
     pub struct RawSms {
         pub enabled: bool,
         pub discord_webhook_url: Secret<String>,
+        pub telegram_bot_token: Secret<String>,
+        pub telegram_chat_id: String,
         pub db_path: String,
         pub retry_enabled: bool,
         pub retry_interval_sec: u64,
@@ -157,6 +159,8 @@ impl Default for RawSms {
         Self {
             enabled: true,
             discord_webhook_url: Secret::new(String::new()),
+            telegram_bot_token: Secret::new(String::new()),
+            telegram_chat_id: String::new(),
             db_path: super::DEFAULT_SMS_DB_PATH.to_string(),
             retry_enabled: true,
             retry_interval_sec: 3600,

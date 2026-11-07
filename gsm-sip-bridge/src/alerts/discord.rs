@@ -21,14 +21,14 @@ const USER_AGENT: &str = "gsm-sip-bridge/7.2.0";
 /// still surface `Result<u16, String>`) log identically; [`PostError::category`]
 /// is the stable, secret-free value persisted for SMS retry bookkeeping
 /// (specs/121-sms-alert-retry, R6) — the `Unreachable` detail is a raw
-/// `reqwest` message that can contain the webhook URL and is never stored.
+/// `reqwest` message, kept out of the store.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PostError {
     /// Network-level failure on every attempt.
     Unreachable(String),
     /// The 30 s total budget ran out.
     Timeout,
-    /// A non-retryable 4xx from Discord.
+    /// A non-retryable 4xx from the service.
     Rejected(u16),
     /// Still 429 after the inline retries.
     RateLimited { retry_after: Duration },
@@ -221,81 +221,112 @@ impl DiscordClient {
         webhook_url: &str,
         payload: serde_json::Value,
     ) -> Result<u16, PostError> {
-        let start = std::time::Instant::now();
-        let mut last_status = 0u16;
-        let mut last_retry_after = Duration::ZERO;
+        post_json_with_retry(&self.client, webhook_url, payload, "Discord").await
+    }
+}
 
-        for attempt in 0..=MAX_RETRIES {
-            if start.elapsed() >= TOTAL_TIMEOUT {
-                // Budget spent while being throttled is still a rate limit:
-                // callers (the SMS retry sweep) stop on it, not on a timeout.
-                return Err(if last_status == 429 {
-                    PostError::RateLimited {
-                        retry_after: last_retry_after,
-                    }
-                } else {
-                    PostError::Timeout
-                });
-            }
+/// Seconds a `429` asks the caller to wait: the `Retry-After` header, else the
+/// Telegram Bot API's `parameters.retry_after`, else one second. A value
+/// `Duration::from_secs_f64` would panic on counts as absent.
+fn retry_after_secs(header: Option<&str>, body: &str) -> f64 {
+    header
+        .and_then(|s| s.parse::<f64>().ok())
+        .or_else(|| {
+            serde_json::from_str::<serde_json::Value>(body)
+                .ok()?
+                .get("parameters")?
+                .get("retry_after")?
+                .as_f64()
+        })
+        .filter(|s| s.is_finite() && (0.0..=86_400.0).contains(s))
+        .unwrap_or(1.0)
+}
 
-            let response = self.client.post(webhook_url).json(&payload).send().await;
+/// POSTs `payload` with the retry, backoff and time budget every notification
+/// service shares. `url` may carry a credential: it is stripped from network
+/// errors, because `PostError::Unreachable` is logged.
+pub(crate) async fn post_json_with_retry(
+    client: &reqwest::Client,
+    url: &str,
+    payload: serde_json::Value,
+    service: &'static str,
+) -> Result<u16, PostError> {
+    let start = std::time::Instant::now();
+    let mut last_status = 0u16;
+    let mut last_retry_after = Duration::ZERO;
 
-            match response {
-                Ok(resp) => {
-                    last_status = resp.status().as_u16();
-                    match last_status {
-                        200 | 204 => return Ok(last_status),
-                        429 => {
-                            let retry_after = resp
-                                .headers()
-                                .get("retry-after")
-                                .and_then(|v| v.to_str().ok())
-                                .and_then(|s| s.parse::<f64>().ok())
-                                .unwrap_or(1.0);
-                            last_retry_after = Duration::from_secs_f64(retry_after);
-                            // A pause longer than the budget left is not worth
-                            // waiting out (and would outlive the SMS retry
-                            // lease): report the throttle now.
-                            if start.elapsed() + last_retry_after >= TOTAL_TIMEOUT {
-                                return Err(PostError::RateLimited {
-                                    retry_after: last_retry_after,
-                                });
-                            }
-                            tokio::time::sleep(last_retry_after).await;
-                        }
-                        400..=499 => {
-                            let body = resp.text().await.unwrap_or_default();
-                            tracing::warn!(
-                                status = last_status,
-                                body = %body.chars().take(256).collect::<String>(),
-                                "Discord returned client error"
-                            );
-                            return Err(PostError::Rejected(last_status));
-                        }
-                        _ => {
-                            let backoff = Duration::from_secs(1 << attempt.min(3));
-                            tokio::time::sleep(backoff).await;
-                        }
-                    }
+    for attempt in 0..=MAX_RETRIES {
+        if start.elapsed() >= TOTAL_TIMEOUT {
+            // Budget spent while being throttled is still a rate limit:
+            // callers (the SMS retry sweep) stop on it, not on a timeout.
+            return Err(if last_status == 429 {
+                PostError::RateLimited {
+                    retry_after: last_retry_after,
                 }
-                Err(e) => {
-                    if attempt == MAX_RETRIES {
-                        return Err(PostError::Unreachable(e.to_string()));
-                    }
-                    let backoff = Duration::from_secs(1 << attempt.min(3));
-                    tokio::time::sleep(backoff).await;
-                }
-            }
+            } else {
+                PostError::Timeout
+            });
         }
 
-        Err(if last_status == 429 {
-            PostError::RateLimited {
-                retry_after: last_retry_after,
+        let response = client.post(url).json(&payload).send().await;
+
+        match response {
+            Ok(resp) => {
+                last_status = resp.status().as_u16();
+                match last_status {
+                    200 | 204 => return Ok(last_status),
+                    429 => {
+                        let header = resp
+                            .headers()
+                            .get("retry-after")
+                            .and_then(|v| v.to_str().ok())
+                            .map(str::to_string);
+                        let body = resp.text().await.unwrap_or_default();
+                        last_retry_after =
+                            Duration::from_secs_f64(retry_after_secs(header.as_deref(), &body));
+                        // A pause longer than the budget left is not worth
+                        // waiting out (and would outlive the SMS retry
+                        // lease): report the throttle now.
+                        if start.elapsed() + last_retry_after >= TOTAL_TIMEOUT {
+                            return Err(PostError::RateLimited {
+                                retry_after: last_retry_after,
+                            });
+                        }
+                        tokio::time::sleep(last_retry_after).await;
+                    }
+                    400..=499 => {
+                        let body = resp.text().await.unwrap_or_default();
+                        tracing::warn!(
+                            service,
+                            status = last_status,
+                            body = %body.chars().take(256).collect::<String>(),
+                            "notification service returned client error"
+                        );
+                        return Err(PostError::Rejected(last_status));
+                    }
+                    _ => {
+                        let backoff = Duration::from_secs(1 << attempt.min(3));
+                        tokio::time::sleep(backoff).await;
+                    }
+                }
             }
-        } else {
-            PostError::ServerError(last_status)
-        })
+            Err(e) => {
+                if attempt == MAX_RETRIES {
+                    return Err(PostError::Unreachable(e.without_url().to_string()));
+                }
+                let backoff = Duration::from_secs(1 << attempt.min(3));
+                tokio::time::sleep(backoff).await;
+            }
+        }
     }
+
+    Err(if last_status == 429 {
+        PostError::RateLimited {
+            retry_after: last_retry_after,
+        }
+    } else {
+        PostError::ServerError(last_status)
+    })
 }
 
 /// The value for an embed's `Phone` field (specs/034-alert-identity, FR-005):

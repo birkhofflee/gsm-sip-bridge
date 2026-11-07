@@ -23,6 +23,7 @@ use toml::Value;
 const SECRET_KEY_PATHS: &[&str] = &[
     "sip.password",
     "sms.discord_webhook_url",
+    "sms.telegram_bot_token",
     "alerts.discord_webhook_url",
     "alerts.sms.discord_webhook_url",
     "alerts.module_lifecycle.discord_webhook_url",

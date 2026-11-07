@@ -57,8 +57,13 @@ sip_dial_timeout_sec = 30      # range: 5-120
 [sms]
 enabled = true
 discord_webhook_url = "env:DISCORD_WEBHOOK_URL"
+# Post SMS to Telegram instead of Discord: set both keys below and clear
+# discord_webhook_url, since only one service can be configured. Create the bot
+# with @BotFather and send it a message first; a bot cannot start a chat.
+# telegram_bot_token = "env:TELEGRAM_BOT_TOKEN"
+# telegram_chat_id = "env:TELEGRAM_CHAT_ID"   # numeric id, or "@channelname"
 db_path = "/data/store.db"
-# Undelivered Discord notifications are retried (specs/121-sms-alert-retry):
+# Undelivered notifications are retried (specs/121-sms-alert-retry):
 # after the next text, and every retry_interval_sec. Set retry_enabled = false
 # to restore the old record-only behaviour.
 retry_enabled = true

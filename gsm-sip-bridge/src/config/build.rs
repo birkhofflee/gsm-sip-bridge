@@ -334,10 +334,77 @@ fn build_bridge(raw: RawBridge, server: &SipServerConfig) -> BridgeResult<Bridge
     })
 }
 
+/// The Bot API's `<digits>:<url-safe>` shape. Checked because the token becomes
+/// part of a URL path, and because a typo otherwise only shows as failed sends.
+fn is_telegram_token(token: &str) -> bool {
+    token.split_once(':').is_some_and(|(id, secret)| {
+        !id.is_empty()
+            && id.chars().all(|c| c.is_ascii_digit())
+            && !secret.is_empty()
+            && secret
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    })
+}
+
+fn is_telegram_chat_id(chat_id: &str) -> bool {
+    match chat_id.strip_prefix('@') {
+        Some(name) => {
+            !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        None => {
+            let digits = chat_id.strip_prefix('-').unwrap_or(chat_id);
+            !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+        }
+    }
+}
+
+/// Never echoes the token: this error reaches logs.
+fn validate_sms_notifier(raw: &RawSms) -> BridgeResult<()> {
+    let token = raw.telegram_bot_token.expose_secret();
+    let chat_id = &raw.telegram_chat_id;
+    if token.is_empty() != chat_id.is_empty() {
+        return Err(BridgeError::Config(
+            "sms.telegram_bot_token and sms.telegram_chat_id must be set together".into(),
+        ));
+    }
+    if token.is_empty() {
+        return Ok(());
+    }
+    if !raw.discord_webhook_url.expose_secret().is_empty() {
+        return Err(BridgeError::Config(
+            "set only one of sms.discord_webhook_url and sms.telegram_bot_token: \
+             a text has one delivery state"
+                .into(),
+        ));
+    }
+    if !is_telegram_token(token) {
+        return Err(BridgeError::Config(
+            "sms.telegram_bot_token is not in the <digits>:<token> form BotFather issues".into(),
+        ));
+    }
+    if !is_telegram_chat_id(chat_id) {
+        return Err(BridgeError::Config(format!(
+            "sms.telegram_chat_id must be a numeric id or @channelname, got {chat_id:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Builds `[sms]` alone from its TOML body, for the config unit tests.
+#[cfg(test)]
+pub(super) fn build_sms_for_test(lines: &str) -> Result<SmsConfig, String> {
+    let raw: RawSms = toml::from_str(lines).map_err(|e| e.to_string())?;
+    build_sms(raw).map_err(|e| e.to_string())
+}
+
 fn build_sms(raw: RawSms) -> BridgeResult<SmsConfig> {
+    validate_sms_notifier(&raw)?;
     Ok(SmsConfig {
         enabled: raw.enabled,
         discord_webhook_url: raw.discord_webhook_url,
+        telegram_bot_token: raw.telegram_bot_token,
+        telegram_chat_id: raw.telegram_chat_id,
         db_path: raw.db_path,
         retry_enabled: raw.retry_enabled,
         retry_interval_sec: in_range(

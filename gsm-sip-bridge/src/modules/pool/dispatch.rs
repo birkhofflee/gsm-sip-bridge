@@ -407,7 +407,7 @@ impl CardPool {
                 sms::record_and_forward(
                     &tokio::runtime::Handle::current(),
                     self.store.sender(),
-                    self.discord_client.clone(),
+                    self.sms_forwarder.clone(),
                     module_id,
                     sender,
                     body,

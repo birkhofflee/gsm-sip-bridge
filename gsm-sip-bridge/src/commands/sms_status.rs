@@ -1,4 +1,4 @@
-//! `sms-status`: read-only report of SMS Discord delivery state
+//! `sms-status`: read-only report of SMS notification delivery state
 //! (specs/121-sms-alert-retry, contracts/cli.md).
 
 use crate::cli::Cli;
@@ -67,7 +67,7 @@ fn at(ts: Option<i64>) -> String {
 pub fn render(s: &SmsDeliverySummary, _now: i64) -> String {
     let c = &s.counts;
     let mut out = format!(
-        "SMS Discord delivery\n  delivered: {}   pending: {}   failed: {}   abandoned: {}   skipped: {}\n",
+        "SMS notification delivery\n  delivered: {}   pending: {}   failed: {}   abandoned: {}   skipped: {}\n",
         c.sent, c.pending, c.failed, c.abandoned, c.skipped
     );
     if c.legacy_failed > 0 {

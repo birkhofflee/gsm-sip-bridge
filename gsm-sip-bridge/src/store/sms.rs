@@ -32,6 +32,8 @@ pub struct SmsForwardingUpdate {
     pub sms_id: i64,
     pub forwarding_status: String,
     pub forwarded_at: Option<String>,
+    /// The HTTP status from whichever service is configured; the name predates
+    /// Telegram support and is kept to avoid a schema migration.
     pub discord_status_code: Option<i32>,
 }
 

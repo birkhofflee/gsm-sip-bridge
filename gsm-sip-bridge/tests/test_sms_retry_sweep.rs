@@ -47,6 +47,8 @@ impl Rig {
         let cfg = SmsConfig {
             enabled: true,
             discord_webhook_url: Secret::new(self.server.uri()),
+            telegram_bot_token: Secret::new(String::new()),
+            telegram_chat_id: String::new(),
             db_path: self.db.to_string_lossy().into_owned(),
             retry_enabled: enabled,
             retry_interval_sec: 3600,

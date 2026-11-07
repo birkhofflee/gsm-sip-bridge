@@ -231,7 +231,7 @@ pub enum Commands {
     /// after specs/021 moved the rest into `supervise`.
     Healthcheck,
 
-    /// Reports SMS Discord-notification delivery state from the store at
+    /// Reports SMS notification delivery state from the store at
     /// `[sms].db_path`: counts per state, the age of the oldest undelivered
     /// text, and the latest undelivered/abandoned rows (never message
     /// bodies). Read-only; works with the daemon down (specs/121-sms-alert-retry).

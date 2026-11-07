@@ -272,7 +272,7 @@ pub static SMS_FORWARDED_TOTAL: Lazy<CounterVec> = Lazy::new(|| {
     register_counter_vec!(
         opts!(
             "gsm_sip_bridge_sms_forwarded_total",
-            "Discord forwarding outcomes"
+            "SMS notification forwarding outcomes"
         ),
         &["module", "outcome", "transport"]
     )
@@ -286,7 +286,7 @@ pub static SMS_UNDELIVERED: Lazy<GaugeVec> = Lazy::new(|| {
     register_gauge_vec!(
         opts!(
             "gsm_sip_bridge_sms_undelivered",
-            "SMS Discord notifications not yet delivered"
+            "SMS notifications not yet delivered"
         ),
         &["state"]
     )
@@ -296,7 +296,7 @@ pub static SMS_UNDELIVERED: Lazy<GaugeVec> = Lazy::new(|| {
 pub static SMS_ABANDONED: Lazy<Gauge> = Lazy::new(|| {
     register_gauge!(opts!(
         "gsm_sip_bridge_sms_abandoned",
-        "SMS Discord notifications given up on (retry age limit)"
+        "SMS notifications given up on (retry age limit)"
     ))
     .unwrap()
 });

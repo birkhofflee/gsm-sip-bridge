@@ -53,8 +53,8 @@ pub struct CardPool {
     config: AppConfig,
     store: StoreHandle,
     sip_bridge: SipBridge,
-    discord_client: Option<SmsForwarder>,
-    /// specs/022-discord-critical-alerts. Separate from `discord_client`
+    sms_forwarder: Option<SmsForwarder>,
+    /// specs/022-discord-critical-alerts. Separate from `sms_forwarder`
     /// (SMS's own dedicated client): alert categories resolve their own
     /// webhook per event (`alerts::dispatch`), so this client is always
     /// constructed and never gated on any one category being enabled.
@@ -99,19 +99,8 @@ impl CardPool {
         sms_handler: SmsHandler,
     ) -> Self {
         let instance = alerts::instance_label(&config.alerts);
-        let discord_client = if sms_handler.has_webhook() {
-            let url = config.sms.discord_webhook_url.clone();
-            match DiscordClient::new(url, instance.clone()) {
-                Ok(client) => Some(SmsForwarder::new(
-                    client,
-                    &config.sms,
-                    alerts::line_phone_map(&config),
-                )),
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to create Discord client");
-                    None
-                }
-            }
+        let sms_forwarder = if sms_handler.has_notifier() {
+            SmsForwarder::from_app_config(&config)
         } else {
             None
         };
@@ -158,7 +147,7 @@ impl CardPool {
             config,
             store,
             sip_bridge,
-            discord_client,
+            sms_forwarder,
             alerts_client,
             cron_schedule,
             cycle: None,
@@ -180,10 +169,10 @@ impl CardPool {
             tracing::error!(error = %e, "SIP registration failed — calls will not be bridged");
         }
 
-        // specs/121-sms-alert-retry: the hourly sweep for texts whose Discord
-        // post failed. Runs for the life of the pool; a failed text is also
+        // specs/121-sms-alert-retry: the hourly sweep for texts whose
+        // notification failed. Runs for the life of the pool; a failed text is also
         // retried after the next text arrives (`sms::record_and_forward`).
-        if let Some(forwarder) = &self.discord_client {
+        if let Some(forwarder) = &self.sms_forwarder {
             sms::retry::spawn_timer(&tokio::runtime::Handle::current(), forwarder.clone(), None);
         }
 

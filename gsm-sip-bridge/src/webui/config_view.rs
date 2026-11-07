@@ -86,6 +86,7 @@ mod tests {
         for key in [
             "password",
             "discord_webhook_url",
+            "telegram_bot_token",
             "API_KEY",
             "client_secret",
             "auth_token",

@@ -384,13 +384,25 @@ pub struct CsConfig {
 pub struct SmsConfig {
     pub enabled: bool,
     pub discord_webhook_url: Secret<String>,
+    /// Telegram Bot API token. Set together with `telegram_chat_id`, and never
+    /// with `discord_webhook_url`: a text has one delivery state in the store.
+    pub telegram_bot_token: Secret<String>,
+    /// Numeric chat id (negative for a group) or `@channelname`.
+    pub telegram_chat_id: String,
     pub db_path: String,
-    /// Re-post undelivered Discord notifications (specs/121-sms-alert-retry).
+    /// Re-post undelivered notifications (specs/121-sms-alert-retry).
     pub retry_enabled: bool,
     /// Interval of the background retry sweep, per process owning an SMS client.
     pub retry_interval_sec: u64,
     /// A text still undelivered this long after it was received is abandoned.
     pub retry_max_age_sec: u64,
+}
+
+impl SmsConfig {
+    /// Whether a service is configured to receive SMS notifications.
+    pub fn has_notifier(&self) -> bool {
+        !self.discord_webhook_url.expose_secret().is_empty() || !self.telegram_chat_id.is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2805,6 +2817,81 @@ password = "pass"
             .unwrap_err()
             .to_string()
             .contains("vowifi.tunnel_engine must be"));
+    }
+
+    fn sms_config(lines: &str) -> Result<SmsConfig, String> {
+        // Not `MINIMAL_TOML` + `[sms]`: it may already name that section.
+        build::build_sms_for_test(lines)
+    }
+
+    const TOKEN: &str = "123456:AAFakeTokenForTests_-";
+
+    #[test]
+    fn telegram_is_off_by_default_and_configures_a_notifier_when_set() {
+        assert!(!sms_config("").unwrap().has_notifier());
+        let cfg = sms_config(&format!(
+            "telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"-1001234\"\n"
+        ))
+        .unwrap();
+        assert!(cfg.has_notifier());
+        assert_eq!(cfg.telegram_chat_id, "-1001234");
+    }
+
+    #[test]
+    fn telegram_token_and_chat_id_must_come_together() {
+        for lines in [
+            format!("telegram_bot_token = \"{TOKEN}\"\n"),
+            "telegram_chat_id = \"1234\"\n".to_string(),
+        ] {
+            let err = sms_config(&lines).unwrap_err();
+            assert!(err.contains("set together"), "{err}");
+        }
+    }
+
+    #[test]
+    fn telegram_and_discord_cannot_both_be_set() {
+        let err = sms_config(&format!(
+            "discord_webhook_url = \"https://example.invalid/x\"\n\
+             telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"1234\"\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("only one"), "{err}");
+    }
+
+    #[test]
+    fn a_malformed_telegram_token_is_rejected_without_echoing_it() {
+        for bad in [
+            "nocolon",
+            "abc:def",
+            "123:with/slash",
+            "123:",
+            ":abc",
+            "123:a b",
+        ] {
+            let err = sms_config(&format!(
+                "telegram_bot_token = \"{bad}\"\ntelegram_chat_id = \"1234\"\n"
+            ))
+            .unwrap_err();
+            assert!(err.contains("telegram_bot_token"), "{bad}: {err}");
+            assert!(
+                !err.contains(bad),
+                "the error must not echo the token: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn telegram_chat_id_accepts_numeric_ids_and_channel_names_only() {
+        for good in ["1234", "-1001234", "@my_channel"] {
+            let lines =
+                format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"{good}\"\n");
+            assert!(sms_config(&lines).is_ok(), "{good}");
+        }
+        for bad in ["abc", "-", "@", "12 34", "@bad name", "12/34"] {
+            let lines = format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"{bad}\"\n");
+            let err = sms_config(&lines).unwrap_err();
+            assert!(err.contains("telegram_chat_id"), "{bad}: {err}");
+        }
     }
 
     #[test]

@@ -11,6 +11,8 @@ const REDACTED_FIELD_NAMES: &[&str] = &[
     "token",
     "sip.password",
     "sms.discord_webhook_url",
+    "telegram_bot_token",
+    "sms.telegram_bot_token",
 ];
 
 const REDACTED_PLACEHOLDER: &str = "[REDACTED]";

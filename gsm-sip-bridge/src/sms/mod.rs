@@ -1,6 +1,7 @@
 pub mod discord;
 pub mod reader;
 pub mod retry;
+pub mod telegram;
 
 use crate::config::SmsConfig;
 use crate::control::protocol::{AgentState, ObservedEvent, SmsOutcome};
@@ -12,24 +13,76 @@ use crossbeam_channel::Sender;
 pub use retry::SmsForwarder;
 use tokio::runtime::Handle;
 
+/// The one service this deployment posts SMS to. One, because a text has one
+/// delivery state in the store; config loading refuses more than one.
+#[derive(Clone)]
+pub enum SmsNotifier {
+    Discord(discord::DiscordClient),
+    Telegram(telegram::TelegramClient),
+}
+
+impl SmsNotifier {
+    pub fn service_name(&self) -> &'static str {
+        match self {
+            Self::Discord(_) => "Discord",
+            Self::Telegram(_) => "Telegram",
+        }
+    }
+
+    async fn forward_sms(
+        &self,
+        module_id: &str,
+        sender: &str,
+        body: &str,
+        timestamp: &str,
+        phone_number: Option<&str>,
+        late: bool,
+    ) -> Result<u16, discord::PostError> {
+        match self {
+            Self::Discord(c) => {
+                c.forward_sms(module_id, sender, body, timestamp, phone_number, late)
+                    .await
+            }
+            Self::Telegram(c) => {
+                c.forward_sms(module_id, sender, body, timestamp, phone_number, late)
+                    .await
+            }
+        }
+    }
+}
+
+impl From<discord::DiscordClient> for SmsNotifier {
+    fn from(client: discord::DiscordClient) -> Self {
+        Self::Discord(client)
+    }
+}
+
+impl From<telegram::TelegramClient> for SmsNotifier {
+    fn from(client: telegram::TelegramClient) -> Self {
+        Self::Telegram(client)
+    }
+}
+
 pub struct SmsHandler {
     enabled: bool,
-    webhook_url: String,
+    has_notifier: bool,
     store_tx: Sender<StoreCommand>,
 }
 
 impl SmsHandler {
     pub fn new(config: &SmsConfig, store_tx: Sender<StoreCommand>) -> Self {
-        let webhook_url = config.discord_webhook_url.expose_secret().clone();
+        let has_notifier = config.has_notifier();
         if !config.enabled {
             tracing::info!("SMS monitoring disabled via configuration");
-        } else if webhook_url.is_empty() {
-            tracing::info!("SMS forwarding disabled (no webhook URL configured); messages will be persisted only");
+        } else if !has_notifier {
+            tracing::info!(
+                "SMS forwarding disabled (no notifier configured); messages will be persisted only"
+            );
         }
 
         Self {
             enabled: config.enabled,
-            webhook_url,
+            has_notifier,
             store_tx,
         }
     }
@@ -38,8 +91,8 @@ impl SmsHandler {
         self.enabled
     }
 
-    pub fn has_webhook(&self) -> bool {
-        !self.webhook_url.is_empty()
+    pub fn has_notifier(&self) -> bool {
+        self.has_notifier
     }
 
     pub fn store_sender(&self) -> Sender<StoreCommand> {
@@ -48,7 +101,7 @@ impl SmsHandler {
 }
 
 /// Persists an inbound SMS as `forwarding_status = "pending"` and, if a
-/// `DiscordClient` is configured, forwards it and updates that same row's
+/// notifier is configured, forwards it and updates that same row's
 /// forwarding status once the attempt completes. Shared by the
 /// circuit-switched AT-command flow (`modules::mod`'s
 /// `BridgeEvent::SmsReceived` handler) and the VoWiFi SIP `MESSAGE` flow
@@ -153,11 +206,21 @@ pub fn record_and_forward(
         }
         let outcome = match result {
             Ok(status) => {
-                tracing::info!(module = %module_id, status = status, "SMS forwarded to Discord");
+                tracing::info!(
+                    module = %module_id,
+                    status = status,
+                    service = forwarder.client.service_name(),
+                    "SMS forwarded"
+                );
                 SmsOutcome::Sent
             }
             Err(e) => {
-                tracing::warn!(module = %module_id, error = %e, "SMS Discord forwarding failed");
+                tracing::warn!(
+                    module = %module_id,
+                    error = %e,
+                    service = forwarder.client.service_name(),
+                    "SMS forwarding failed"
+                );
                 SmsOutcome::Failed
             }
         };

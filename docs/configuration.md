@@ -45,16 +45,21 @@ The bridge reads a single TOML configuration file specified via `--config`.
 |---|---|---|---|
 | `enabled` | boolean | true | Disable SMS monitoring |
 | `discord_webhook_url` | string | `""` | Supports `env:VAR` syntax |
+| `telegram_bot_token` | string | `""` | Telegram bot token from @BotFather, to post SMS to Telegram instead of Discord. Requires `telegram_chat_id`. Cannot be combined with `discord_webhook_url`. Supports `env:VAR` syntax |
+| `telegram_chat_id` | string | `""` | Target chat: a numeric id (negative for a group) or `@channelname`, as a quoted string. The bot must already be able to post there. Supports `env:VAR` syntax |
 | `db_path` | string | `/var/lib/gsm-sip-bridge/store.db` | Store path |
-| `retry_enabled` | boolean | true | Retry Discord notifications that failed to deliver. `false` records the failure and never retries |
-| `retry_interval_sec` | integer | 3600 | Interval of the background retry sweep, per process that owns an SMS Discord client (range 60-86400) |
+| `retry_enabled` | boolean | true | Retry notifications that failed to deliver. `false` records the failure and never retries |
+| `retry_interval_sec` | integer | 3600 | Interval of the background retry sweep, per process that owns an SMS notifier (range 60-86400) |
 | `retry_max_age_sec` | integer | 604800 | A text still undelivered this long after it was received is marked `abandoned` (range 3600-2592000) |
 
-**Retry behaviour.** A text whose Discord post fails stays in the store as
+Critical-event alerts under `[alerts]` remain Discord-only, whichever service
+receives SMS.
+
+**Retry behaviour.** A text whose notification fails stays in the store as
 `failed` with the reason in `last_error`. Undelivered texts are re-posted
 oldest-first after the next text arrives and then every `retry_interval_sec`;
-each retried notification is titled `[Late] SMS from …` and carries an
-`Originally received` field. Delivered texts are never re-sent. Texts that
+each retried notification is titled `[Late] SMS from …` and carries its
+original receive time. Delivered texts are never re-sent. Texts that
 failed before this feature existed are not retried. Retry is on by default —
 upgrading changes behaviour for installs that never set these keys.
 

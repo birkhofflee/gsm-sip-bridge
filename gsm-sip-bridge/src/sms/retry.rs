@@ -1,4 +1,4 @@
-//! Retry of undelivered SMS Discord notifications (specs/121-sms-alert-retry).
+//! Retry of undelivered SMS notifications (specs/121-sms-alert-retry).
 //!
 //! Delivery state lives in the shared SQLite `sms` table. The daemon and both
 //! VoWiFi agents each own a [`SmsForwarder`] and may sweep concurrently, so
@@ -6,7 +6,9 @@
 //! in-process lock.
 
 use super::discord::DiscordClient;
-use crate::config::SmsConfig;
+use super::telegram::TelegramClient;
+use super::SmsNotifier;
+use crate::config::{AppConfig, SmsConfig};
 use crate::control::protocol::SmsOutcome;
 use crate::error::{BridgeError, BridgeResult};
 use crate::observability::reporter::Reporter;
@@ -19,17 +21,17 @@ use std::time::Duration;
 use tokio::runtime::Handle;
 
 /// Rows re-posted per sweep pass. A long outage's backlog therefore drains
-/// across several triggers rather than in one burst against Discord.
+/// across several triggers rather than in one burst against the service.
 const SWEEP_BATCH: usize = 50;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// A Discord client plus everything needed to retry what it fails to deliver.
-/// Replaces a bare `DiscordClient` wherever SMS is forwarded, so the retry
+/// A notifier plus everything needed to retry what it fails to deliver.
+/// Used wherever SMS is forwarded, so the retry
 /// settings travel with the client instead of through every call chain.
 #[derive(Clone)]
 pub struct SmsForwarder {
-    pub(super) client: DiscordClient,
+    pub(super) client: SmsNotifier,
     pub(super) db_path: String,
     pub(super) retry_enabled: bool,
     retry_interval: Duration,
@@ -38,7 +40,7 @@ pub struct SmsForwarder {
     /// retried embed. Seeded from configuration and extended by every fresh
     /// text that carries its number, so a retry names the right SIM.
     phones: Arc<Mutex<HashMap<String, String>>>,
-    /// Set from a Discord `Retry-After`; no backlog row is posted before it.
+    /// Set from the service's `Retry-After`; no backlog row is posted before it.
     /// Shared by every clone, so the first-attempt path, the next-alert sweep
     /// and the timer all honour one pause. Per process: the daemon and each
     /// agent learn of a throttle from their own 429.
@@ -49,9 +51,13 @@ pub struct SmsForwarder {
 const MAX_COOLDOWN: Duration = Duration::from_secs(3600);
 
 impl SmsForwarder {
-    pub fn new(client: DiscordClient, cfg: &SmsConfig, phones: HashMap<String, String>) -> Self {
+    pub fn new(
+        client: impl Into<SmsNotifier>,
+        cfg: &SmsConfig,
+        phones: HashMap<String, String>,
+    ) -> Self {
         Self {
-            client,
+            client: client.into(),
             db_path: cfg.db_path.clone(),
             retry_enabled: cfg.retry_enabled,
             retry_interval: Duration::from_secs(cfg.retry_interval_sec),
@@ -61,7 +67,37 @@ impl SmsForwarder {
         }
     }
 
-    /// Records a Discord rate limit so retries wait out its `Retry-After`.
+    /// The forwarder `config` asks for; `None` when `[sms]` names no service,
+    /// or when its client cannot be built (logged).
+    pub fn from_app_config(config: &AppConfig) -> Option<Self> {
+        let sms = &config.sms;
+        let instance = crate::alerts::instance_label(&config.alerts);
+        let notifier: BridgeResult<SmsNotifier> = if !sms.telegram_chat_id.is_empty() {
+            TelegramClient::new(
+                &sms.telegram_bot_token,
+                sms.telegram_chat_id.clone(),
+                instance,
+            )
+            .map(Into::into)
+        } else if !sms.discord_webhook_url.expose_secret().is_empty() {
+            DiscordClient::new(sms.discord_webhook_url.clone(), instance).map(Into::into)
+        } else {
+            return None;
+        };
+        match notifier {
+            Ok(notifier) => Some(Self::new(
+                notifier,
+                sms,
+                crate::alerts::line_phone_map(config),
+            )),
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create SMS notifier");
+                None
+            }
+        }
+    }
+
+    /// Records a service rate limit so retries wait out its `Retry-After`.
     pub(super) fn note_rate_limit(&self, retry_after: Duration) {
         let until = tokio::time::Instant::now() + retry_after.min(MAX_COOLDOWN);
         if let Ok(mut c) = self.cooldown_until.lock() {
@@ -96,12 +132,12 @@ pub struct SweepOutcome {
     pub delivered: usize,
     pub still_failing: usize,
     pub abandoned: usize,
-    /// The pass stopped on a Discord rate limit; the next trigger continues.
+    /// The pass stopped on a service rate limit; the next trigger continues.
     pub stopped_early: bool,
 }
 
 /// Runs a blocking store operation on a short-lived connection. Never held
-/// across an `.await`, so a slow Discord post cannot pin a SQLite handle.
+/// across an `.await`, so a slow post cannot pin a SQLite handle.
 async fn with_conn<T, F>(db_path: &str, f: F) -> BridgeResult<T>
 where
     T: Send + 'static,
@@ -162,10 +198,11 @@ impl Drop for LeaseGuard {
 /// One retry pass: abandon what has outlived `retry_max_age_sec`, then
 /// re-post undelivered texts oldest-first, stopping early on a rate limit.
 ///
-/// At-least-once, by design: if the process dies after Discord accepts a post
-/// but before [`sms::mark_sent`] lands, the lease expires and the text is
+/// At-least-once, by design: if the process dies after the service accepts a
+/// post but before [`sms::mark_sent`] lands, the lease expires and the text is
 /// posted again. That window is the accepted limit in the spec's edge cases;
-/// closing it would need Discord-side idempotency, which webhooks lack.
+/// closing it would need service-side idempotency, which neither Discord
+/// webhooks nor Telegram's `sendMessage` offer.
 pub async fn sweep(fwd: &SmsForwarder, reporter: &Option<Reporter>) -> SweepOutcome {
     sweep_excluding(fwd, reporter, None).await
 }
@@ -196,7 +233,7 @@ pub async fn sweep_excluding(
         }
     }
 
-    // After expiry, not before: abandoning needs no Discord request, so a
+    // After expiry, not before: abandoning needs no service request, so a
     // throttled webhook must not leave texts past the age limit reported as
     // failed.
     if fwd.cooling_down() {
@@ -272,7 +309,12 @@ pub async fn sweep_excluding(
                 }
                 out.delivered += 1;
                 super::report_outcome(&cand.module_id, transport, SmsOutcome::Sent, reporter);
-                tracing::info!(id, module = %cand.module_id, "late SMS delivered to Discord");
+                tracing::info!(
+                    id,
+                    module = %cand.module_id,
+                    service = fwd.client.service_name(),
+                    "late SMS delivered"
+                );
             }
             Err(e) => {
                 let category = e.category();
@@ -311,7 +353,7 @@ fn log_summary(out: &SweepOutcome) {
 }
 
 /// Sweeps every `retry_interval_sec`, first tick one full interval after
-/// start: a restart storm must not hammer Discord, and a text waits at most
+/// start: a restart storm must not hammer the service, and a text waits at most
 /// one interval after a restart. `Delay` turns a stalled runtime or a clock
 /// jump into one late tick instead of a burst.
 pub fn spawn_timer(
