@@ -19,6 +19,28 @@ sudo apt install build-essential pkg-config clang libclang-dev \
   libasound2-dev libusb-1.0-0-dev libpjproject-dev uuid-dev libssl-dev
 ```
 
+## Building with Nix
+
+`flake.nix` builds the same binary as the Docker image. It builds PJSIP 2.17
+statically, with `docker/pjsip-config-site.h` and the AMR-NB, AMR-WB and Opus
+codecs, and links `gsm-sip-bridge` with `pjsip-linked` and `amr-linked`. The
+Rust toolchain is pinned from `rust-toolchain.toml`. Linux only.
+
+```bash
+nix build                  # ./result/bin/gsm-sip-bridge
+nix build .#pjproject      # the PJSIP build on its own
+nix develop                # toolchain, libraries, make, cargo-deny, cargo-nextest, shellcheck
+```
+
+The dev shell is enough for `make lint` and `make test`, and for
+`cargo test -p pjsua-safe --features pjsip-linked` against the project's own
+PJSIP build (see below), so the `config_site.h` caveat there does not apply.
+
+The flake packages the binary only. At runtime, `supervise` still needs what
+the Docker image provides beside it: strongSwan with this project's patches,
+`pcscd` with the `vpcd` reader, and `iproute2`. To deploy VoWiFi, use the
+image.
+
 ## Build and run
 
 ```bash
