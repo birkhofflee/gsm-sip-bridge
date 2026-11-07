@@ -21,6 +21,9 @@ const PCMU_PAYLOAD_TYPE: u8 = 0;
 /// arbitrary but must match between the `a=rtpmap`/`a=fmtp` lines here and
 /// whatever `parse_answer` compares the answer's payload type against.
 const AMR_WB_PAYLOAD_TYPE: u8 = 96;
+/// Dynamic payload types `with_telephone_event` offers for RFC 4733 events.
+const TELEPHONE_EVENT_8K_PAYLOAD_TYPE: u8 = 100;
+const TELEPHONE_EVENT_16K_PAYLOAD_TYPE: u8 = 105;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegotiatedCodec {
@@ -190,9 +193,53 @@ pub fn build_offer(local_ip: IpAddr, rtp_port: u16, session_id: u64, offer: Code
     sdp
 }
 
+/// `sdp` (a `build_offer` result) with RFC 4733 `telephone-event` added at the
+/// clock rate of each offered codec. `build_offer` itself stays codec-only, so
+/// a deployment that has not opted in keeps sending byte-identical offers.
+pub fn with_telephone_event(sdp: &str) -> String {
+    let mut events = vec![(TELEPHONE_EVENT_8K_PAYLOAD_TYPE, 8000)];
+    if sdp.contains("AMR-WB/16000") {
+        events.push((TELEPHONE_EVENT_16K_PAYLOAD_TYPE, 16000));
+    }
+    let mut out = String::with_capacity(sdp.len() + 96);
+    for line in sdp.split_inclusive("\r\n") {
+        if line.starts_with("m=audio ") {
+            out.push_str(line.trim_end());
+            for (pt, _) in &events {
+                out.push_str(&format!(" {pt}"));
+            }
+            out.push_str("\r\n");
+        } else if line == "a=sendrecv\r\n" {
+            for (pt, rate) in &events {
+                out.push_str(&format!(
+                    "a=rtpmap:{pt} telephone-event/{rate}\r\na=fmtp:{pt} 0-15\r\n"
+                ));
+            }
+            out.push_str(line);
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
+}
+
 pub struct SdpAnswer {
     pub remote_rtp: SocketAddr,
     pub codec: NegotiatedCodec,
+    /// `telephone-event` payload types the answer declared, as
+    /// `(payload_type, clock_rate)`.
+    pub dtmf: Vec<(u8, u32)>,
+}
+
+/// `(payload_type, clock_rate)` when `line` is an `a=rtpmap` for
+/// `telephone-event`.
+fn telephone_event_rtpmap(line: &str) -> Option<(u8, u32)> {
+    let (pt, encoding) = line.strip_prefix("a=rtpmap:")?.split_once(' ')?;
+    let mut parts = encoding.trim().split('/');
+    if !parts.next()?.eq_ignore_ascii_case("telephone-event") {
+        return None;
+    }
+    Some((pt.parse().ok()?, parts.next()?.parse().ok()?))
 }
 
 /// Parse an SDP answer body down to just what's needed to send/receive
@@ -205,10 +252,13 @@ pub fn parse_answer(body: &str) -> BridgeResult<SdpAnswer> {
     let mut conn_ip: Option<IpAddr> = None;
     let mut rtp_port: Option<u16> = None;
     let mut payload_type: Option<u8> = None;
+    let mut dtmf = Vec::new();
 
     for line in body.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("c=IN ") {
+        if let Some(event) = telephone_event_rtpmap(line) {
+            dtmf.push(event);
+        } else if let Some(rest) = line.strip_prefix("c=IN ") {
             // "IP4 1.2.3.4" or "IP6 2001:db8::1". Only *replace* a value we
             // already have when this line actually parses — RFC 4566 allows a
             // `c=` per media section as well as one at session level, and
@@ -250,7 +300,24 @@ pub fn parse_answer(body: &str) -> BridgeResult<SdpAnswer> {
     Ok(SdpAnswer {
         remote_rtp: SocketAddr::new(conn_ip, rtp_port),
         codec,
+        dtmf,
     })
+}
+
+/// `offered_chosen_codec`, carrying the `telephone-event` payload type the
+/// answer declared at the chosen codec's clock rate. Empty `answer_dtmf` when
+/// the offer carried no `telephone-event`, so the result matches
+/// `offered_chosen_codec` exactly.
+pub(crate) fn offered_chosen_codec_with_dtmf(
+    negotiated: NegotiatedCodec,
+    answer_dtmf: &[(u8, u32)],
+) -> Option<ChosenCodec> {
+    let mut chosen = offered_chosen_codec(negotiated)?;
+    chosen.dtmf_payload_type = answer_dtmf
+        .iter()
+        .find(|(_, rate)| *rate == negotiated.sample_rate())
+        .map(|(pt, _)| *pt);
+    Some(chosen)
 }
 
 /// The `ChosenCodec` for a codec `build_offer` actually offers (PCMU or
@@ -272,7 +339,8 @@ pub(crate) fn offered_chosen_codec(negotiated: NegotiatedCodec) -> Option<Chosen
             codec: NegotiatedCodec::Pcmu,
             payload_type: PCMU_PAYLOAD_TYPE,
             octet_aligned: false,
-            // `build_offer` never offers `telephone-event` on this leg
+            // `build_offer` never offers `telephone-event` on this leg;
+            // `offered_chosen_codec_with_dtmf` covers `with_telephone_event`
             // (specs/041 conformance review, RTP-02's sibling gap; carried
             // forward as FR-002a for the offerless-INVITE path too) —
             // nothing for an answer to have echoed.
@@ -1822,6 +1890,60 @@ mod tests {
 
     /// Every carrier in production places calls on this exact offer, so its
     /// bytes must not move without a measurement to justify it.
+    #[test]
+    fn with_telephone_event_adds_one_event_per_offered_clock_rate() {
+        let wide = with_telephone_event(&build_offer(
+            "1.2.3.4".parse().unwrap(),
+            40000,
+            7,
+            CodecOffer::WidebandThenPcmu,
+        ));
+        assert!(
+            wide.contains("m=audio 40000 RTP/AVP 96 0 100 105\r\n"),
+            "{wide}"
+        );
+        assert!(wide.contains("a=rtpmap:100 telephone-event/8000\r\na=fmtp:100 0-15\r\n"));
+        assert!(wide.contains("a=rtpmap:105 telephone-event/16000\r\na=fmtp:105 0-15\r\n"));
+        assert!(wide.ends_with("a=sendrecv\r\n"), "{wide}");
+
+        let narrow = with_telephone_event(&build_offer(
+            "1.2.3.4".parse().unwrap(),
+            40000,
+            7,
+            CodecOffer::PcmuOnly,
+        ));
+        assert!(
+            narrow.contains("m=audio 40000 RTP/AVP 0 100\r\n"),
+            "{narrow}"
+        );
+        assert!(!narrow.contains("telephone-event/16000"), "{narrow}");
+    }
+
+    #[test]
+    fn the_answers_event_payload_type_is_matched_by_clock_rate() {
+        let answer = parse_answer(
+            "v=0\r\nc=IN IP4 10.0.0.1\r\nm=audio 5000 RTP/AVP 0 101\r\n\
+             a=rtpmap:0 PCMU/8000\r\na=rtpmap:101 telephone-event/8000\r\n\
+             a=fmtp:101 0-15\r\na=sendrecv\r\n",
+        )
+        .unwrap();
+        assert_eq!(answer.dtmf, vec![(101, 8000)]);
+        let chosen = offered_chosen_codec_with_dtmf(answer.codec, &answer.dtmf).unwrap();
+        assert_eq!(chosen.dtmf_payload_type, Some(101));
+
+        // Only a rate that does not match the chosen codec: nowhere to send it.
+        let chosen =
+            offered_chosen_codec_with_dtmf(NegotiatedCodec::Pcmu, &[(105, 16000)]).unwrap();
+        assert_eq!(chosen.dtmf_payload_type, None);
+    }
+
+    #[test]
+    fn an_answer_without_telephone_event_declares_none() {
+        let answer =
+            parse_answer("v=0\r\nc=IN IP4 10.0.0.1\r\nm=audio 5000 RTP/AVP 0\r\n").unwrap();
+        assert!(answer.dtmf.is_empty());
+    }
+
     #[test]
     fn the_offer_states_a_codec_and_nothing_more() {
         let sdp = build_offer(

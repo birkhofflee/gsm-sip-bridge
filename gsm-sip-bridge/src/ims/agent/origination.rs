@@ -152,6 +152,9 @@ pub(super) struct PendingOrigination {
     /// happen well before the real final response) to decide whether the
     /// relay started then needs transcoding.
     early_media_codec: Option<NegotiatedCodec>,
+    /// The `telephone-event` payload types that early SDP declared, captured
+    /// alongside `early_media_codec`.
+    early_media_dtmf: Vec<(u8, u32)>,
     /// Set once `early_veth_rx` resolves successfully and the audio relay
     /// actually starts — *not* merely once early media was attempted.
     /// Without this, early media was signaling-only: Agent B would pair and
@@ -203,6 +206,8 @@ pub(super) struct PendingOrigination {
     veth_local_ip: IpAddr,
     veth_sip_port: u16,
     wideband: bool,
+    /// See `config::VowifiConfig::offer_telephone_event`.
+    offer_telephone_event: bool,
     rtp_reorder_wait: Duration,
     /// While `AwaitingCarrier`: the carrier-response deadline (initially
     /// `OUTBOUND_INVITE_TIMEOUT`, extended to `OUTBOUND_RING_TIMEOUT` once any
@@ -254,6 +259,8 @@ enum OriginationStep {
         /// Unused when `veth_rx` is `None` (the relay's codecs were already
         /// resolved during early media).
         answer_codec: sdp::NegotiatedCodec,
+        /// The `telephone-event` payload types the answer declared.
+        answer_dtmf: Vec<(u8, u32)>,
     },
     /// A CANCEL is being sent (abandonment or our own timeout) and we are
     /// waiting for its outcome — a `487` for the INVITE (expected), or a `200`
@@ -296,6 +303,8 @@ pub(super) struct OriginationSetup {
     pub(super) veth_local_ip: IpAddr,
     pub(super) veth_sip_port: u16,
     pub(super) wideband: bool,
+    /// See `config::VowifiConfig::offer_telephone_event`.
+    pub(super) offer_telephone_event: bool,
     /// See `config::AudioConfig::rtp_reorder_wait_ms`.
     pub(super) rtp_reorder_wait: Duration,
     /// See `config::OriginatingHeaders` — empty everywhere by default.
@@ -360,6 +369,11 @@ pub(super) fn begin_origination(
         session_id,
         sdp::CodecOffer::preferring_wideband(setup.wideband && amr_safe::is_available()),
     );
+    let offer = if setup.offer_telephone_event {
+        sdp::with_telephone_event(&offer)
+    } else {
+        offer
+    };
 
     // `;user=phone` (RFC 3261 §19.1.1 / TS 24.229): tells the network this is
     // a PSTN/mobile number, not a resolvable SIP address — the same header
@@ -445,6 +459,7 @@ pub(super) fn begin_origination(
         early_veth_rx: None,
         early_media_sent: false,
         early_media_codec: None,
+        early_media_dtmf: Vec::new(),
         early_relay: None,
         early_veth_socket: None,
         callee_uri,
@@ -457,6 +472,7 @@ pub(super) fn begin_origination(
         veth_local_ip: setup.veth_local_ip,
         veth_sip_port: setup.veth_sip_port,
         wideband: setup.wideband,
+        offer_telephone_event: setup.offer_telephone_event,
         rtp_reorder_wait: setup.rtp_reorder_wait,
         deadline: Instant::now() + OUTBOUND_INVITE_TIMEOUT,
         any_response_seen: false,
@@ -878,6 +894,9 @@ impl PendingOrigination {
                                 Ok(rx) => {
                                     self.early_veth_rx = Some(rx);
                                     self.early_media_codec = Some(early_answer.codec);
+                                    if self.offer_telephone_event {
+                                        self.early_media_dtmf = early_answer.dtmf.clone();
+                                    }
                                     let _ = write_msg(
                                         &mut self.control,
                                         &ControlMessage::CallEarlyMedia {
@@ -1107,6 +1126,11 @@ impl PendingOrigination {
             dialog,
             veth_rx,
             answer_codec: answer.codec,
+            answer_dtmf: if self.offer_telephone_event {
+                answer.dtmf
+            } else {
+                Vec::new()
+            },
         };
         self.deadline = Instant::now() + VETH_INVITE_TIMEOUT;
         OriginationStatus::Pending
@@ -1184,7 +1208,7 @@ pub(super) fn tick_pending_origination(
                     let early_codec = p
                         .early_media_codec
                         .expect("early_media_codec is always set alongside early_veth_rx");
-                    match sdp::offered_chosen_codec(early_codec) {
+                    match sdp::offered_chosen_codec_with_dtmf(early_codec, &p.early_media_dtmf) {
                         // Clone both sockets: one clone of each goes into the
                         // relay, the originals stay available in `p` — the
                         // carrier one for the existing unconditional
@@ -1429,6 +1453,7 @@ fn finish_origination(
     let OriginationStep::AwaitingVeth {
         dialog,
         answer_codec,
+        answer_dtmf,
         ..
     } = step
     else {
@@ -1446,8 +1471,11 @@ fn finish_origination(
     // underlying socket alive.
     let (stop, meter, carrier_codec_name, transcoding) = match (veth_result, early_relay) {
         (None, Some((stop, meter, early_chosen))) => {
-            match sdp::offered_chosen_codec(answer_codec) {
-                Some(final_chosen) if final_chosen.codec == early_chosen.codec => {
+            match sdp::offered_chosen_codec_with_dtmf(answer_codec, &answer_dtmf) {
+                Some(final_chosen)
+                    if final_chosen.codec == early_chosen.codec
+                        && final_chosen.dtmf_payload_type == early_chosen.dtmf_payload_type =>
+                {
                     // The real 200 OK agrees with what the relay was already
                     // built for — trust it, exactly as before this check
                     // existed.
@@ -1587,7 +1615,7 @@ fn finish_origination(
             // offer* said it meant, so there is nothing to re-parse.
             // Reconstructs the rest from what `sdp::build_offer` is known to
             // always send.
-            let chosen = match sdp::offered_chosen_codec(answer_codec) {
+            let chosen = match sdp::offered_chosen_codec_with_dtmf(answer_codec, &answer_dtmf) {
                 Some(c) => c,
                 None => {
                     // Never offered — `sdp::build_offer` only ever lists
@@ -1773,6 +1801,7 @@ mod tests {
             early_veth_rx: None,
             early_media_sent: false,
             early_media_codec: None,
+            early_media_dtmf: Vec::new(),
             early_relay: None,
             early_veth_socket: None,
             callee_uri: "sip:9000000001@example.test".to_string(),
@@ -1785,6 +1814,7 @@ mod tests {
             veth_local_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             veth_sip_port: 0,
             wideband: false,
+            offer_telephone_event: false,
             rtp_reorder_wait: Duration::from_millis(crate::config::DEFAULT_RTP_REORDER_WAIT_MS),
             deadline: Instant::now() + Duration::from_secs(30),
             any_response_seen: false,

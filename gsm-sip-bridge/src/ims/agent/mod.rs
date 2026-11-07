@@ -389,6 +389,7 @@ fn run_inner(
         // one well-known status port.
         status_port: crate::vowifi::AGENT_A_STATUS_PORT,
         wideband: config.wideband,
+        offer_telephone_event: config.offer_telephone_event,
         respond_on_client: config.respond_on_client,
         sms_delivery_report: config.sms_delivery_report,
         sms_report_pcscf_route: config.sms_report_pcscf_route,
@@ -741,6 +742,8 @@ pub(crate) struct InboundParams<'a> {
     /// per-line-derived port (specs/018-volte-multi-modem).
     pub status_port: u16,
     pub wideband: bool,
+    /// See `config::VowifiConfig::offer_telephone_event`.
+    pub offer_telephone_event: bool,
     /// Answer a network-initiated request over the Gm client leg rather than
     /// the socket it arrived on — a carrier quirk, off everywhere but where a
     /// capture says otherwise. See `config::VowifiConfig::respond_on_client`.
@@ -839,6 +842,7 @@ pub(crate) fn serve_inbound(p: InboundParams) -> BridgeResult<()> {
         control_addr,
         status_port,
         wideband,
+        offer_telephone_event,
         respond_on_client,
         sms_delivery_report,
         sms_report_pcscf_route,
@@ -1034,6 +1038,7 @@ pub(crate) fn serve_inbound(p: InboundParams) -> BridgeResult<()> {
             control_addr,
             veth_local_ip: local_ip,
             wideband,
+            offer_telephone_event,
             respond_on_client,
             answer_preference,
             veth_sip_port,
@@ -1950,6 +1955,8 @@ struct DispatchParams<'a> {
     control_addr: SocketAddr,
     veth_local_ip: IpAddr,
     wideband: bool,
+    /// See `config::VowifiConfig::offer_telephone_event`.
+    offer_telephone_event: bool,
     /// See `config::VowifiConfig::respond_on_client`; consumed by the receive
     /// in `dispatch_loop`.
     respond_on_client: bool,
@@ -2027,6 +2034,7 @@ impl DispatchParams<'_> {
             veth_local_ip: self.veth_local_ip,
             veth_sip_port: self.veth_sip_port,
             wideband: self.wideband,
+            offer_telephone_event: self.offer_telephone_event,
             originating_headers: self.originating_headers,
             rtp_reorder_wait: self.rtp_reorder_wait,
         }

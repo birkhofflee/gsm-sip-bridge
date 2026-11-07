@@ -929,6 +929,7 @@ fn build_vowifi(raw: RawVowifi) -> BridgeResult<VowifiConfig> {
             }
             value.to_string()
         },
+        offer_telephone_event: raw.offer_telephone_event,
         gm_auth_alg: {
             const OK: [&str; 3] = ["", "hmac-sha-1-96", "hmac-md5-96"];
             if !OK.contains(&raw.gm_auth_alg.as_str()) {

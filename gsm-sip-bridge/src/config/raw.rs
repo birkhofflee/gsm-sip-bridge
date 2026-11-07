@@ -440,6 +440,9 @@ section! {
         /// `P-Access-Network-Info` value for this path. See
         /// `VowifiConfig::access_network_info`.
         pub access_network_info: String,
+        /// Offer `telephone-event` on outbound calls. See
+        /// `VowifiConfig::offer_telephone_event`.
+        pub offer_telephone_event: bool,
         /// Pin the Gm IPsec algorithms instead of following the network's own
         /// `q=` preference. Empty string = follow it. See
         /// `ims::gm_ipsec::select_security_server`.
@@ -521,6 +524,7 @@ impl Default for RawVowifi {
             sec_agree: true,
             register_request_uri: "home-domain".to_string(),
             access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
+            offer_telephone_event: false,
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,

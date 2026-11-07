@@ -921,6 +921,11 @@ pub struct VowifiConfig {
     /// access leg. The value goes into a SIP header verbatim, so loading the
     /// config rejects an empty value and control characters.
     pub access_network_info: String,
+    /// Offer RFC 4733 `telephone-event` in the outbound INVITE, so keypad
+    /// presses from the phone can reach the carrier. Without it the carrier
+    /// leg negotiates no event payload type and the relay discards them. Off by
+    /// default so existing deployments keep sending the same offer.
+    pub offer_telephone_event: bool,
     /// Pin the Gm IPsec auth/cipher algorithm rather than taking the P-CSCF's
     /// highest-`q` offer. Empty = follow the network's preference. Needed when
     /// a P-CSCF advertises a preference it does not actually use, which shows
@@ -1271,6 +1276,7 @@ impl Default for VowifiConfig {
             sec_agree: true,
             register_request_uri: "home-domain".to_string(),
             access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
+            offer_telephone_event: false,
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,
@@ -2799,6 +2805,13 @@ password = "pass"
             .unwrap_err()
             .to_string()
             .contains("vowifi.tunnel_engine must be"));
+    }
+
+    #[test]
+    fn vowifi_offer_telephone_event_is_opt_in() {
+        assert!(!parse(MINIMAL_TOML).vowifi.offer_telephone_event);
+        let src = format!("{}\n[vowifi]\noffer_telephone_event = true\n", MINIMAL_TOML);
+        assert!(parse(&src).vowifi.offer_telephone_event);
     }
 
     #[test]

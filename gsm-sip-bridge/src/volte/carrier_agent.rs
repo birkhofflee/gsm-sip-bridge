@@ -237,6 +237,7 @@ pub(crate) fn run(
         local_ip,
         control_addr,
         status_port: line.status_port,
+        offer_telephone_event: false,
         // An inbound call is a real conversation; the whole point of this path
         // is that it sounds better than the modem-internal one.
         wideband: true,

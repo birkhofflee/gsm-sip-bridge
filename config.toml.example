@@ -306,6 +306,10 @@ register_request_uri = "home-domain"
 # the reg-event SUBSCRIBE and the answer to an inbound call. Outbound INVITE
 # always sends "IEEE-802.11". Change this only if a network rejects the default.
 access_network_info = "3GPP-WLAN"
+# Offer telephone-event (DTMF) in the outbound INVITE, so keypad presses from
+# the phone reach the carrier. Off by default: without it the carrier leg has
+# no event payload type and keypresses on outbound calls are discarded.
+offer_telephone_event = false
 # Pin the Gm IPsec algorithms rather than following the P-CSCF's own q= order.
 # Leave empty (the default) to follow it. Set these only when a network
 # advertises a preference it does not actually use — the symptom is a
