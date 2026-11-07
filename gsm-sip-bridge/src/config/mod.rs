@@ -911,6 +911,16 @@ pub struct VowifiConfig {
     /// set `"pcscf"` — and please record the capture, because that would be
     /// the first real evidence for the old default.
     pub register_request_uri: String,
+    /// `P-Access-Network-Info` sent on this path's REGISTER and on every other
+    /// request built from the registration (reg-event SUBSCRIBE, the answer to
+    /// an inbound call). Outbound INVITE is the exception: `ims::call` pins
+    /// `IEEE-802.11` for its own documented reason.
+    ///
+    /// Defaults to `ims::ACCESS_NETWORK_WLAN`, what this path has always sent.
+    /// Configurable because a network may read the value when attributing the
+    /// access leg. The value goes into a SIP header verbatim, so loading the
+    /// config rejects an empty value and control characters.
+    pub access_network_info: String,
     /// Pin the Gm IPsec auth/cipher algorithm rather than taking the P-CSCF's
     /// highest-`q` offer. Empty = follow the network's preference. Needed when
     /// a P-CSCF advertises a preference it does not actually use, which shows
@@ -1260,6 +1270,7 @@ impl Default for VowifiConfig {
             use_tcp: true,
             sec_agree: true,
             register_request_uri: "home-domain".to_string(),
+            access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,
@@ -2788,6 +2799,47 @@ password = "pass"
             .unwrap_err()
             .to_string()
             .contains("vowifi.tunnel_engine must be"));
+    }
+
+    #[test]
+    fn vowifi_access_network_info_defaults_to_the_wlan_constant() {
+        let cfg = parse(MINIMAL_TOML);
+        assert_eq!(
+            cfg.vowifi.access_network_info,
+            crate::ims::ACCESS_NETWORK_WLAN
+        );
+    }
+
+    #[test]
+    fn vowifi_access_network_info_accepts_a_parameterised_value() {
+        let src = format!(
+            "{}\n[vowifi]\naccess_network_info = \"IEEE-802.11;i-wlan-node-id=ffffffffffff\"\n",
+            MINIMAL_TOML
+        );
+        assert_eq!(
+            parse(&src).vowifi.access_network_info,
+            "IEEE-802.11;i-wlan-node-id=ffffffffffff"
+        );
+    }
+
+    #[test]
+    fn vowifi_access_network_info_rejects_values_unsafe_for_a_header() {
+        for bad in [
+            "",
+            "   ",
+            "IEEE-802.11\\r\\nX-Injected: 1",
+            "IEEE-802.11\\n",
+        ] {
+            let src = format!(
+                "{}\n[vowifi]\naccess_network_info = \"{}\"\n",
+                MINIMAL_TOML, bad
+            );
+            let err = try_parse(&src).map(|c| c.vowifi).unwrap_err().to_string();
+            assert!(
+                err.contains("vowifi.access_network_info must"),
+                "{bad:?}: {err}"
+            );
+        }
     }
 
     #[test]

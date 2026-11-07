@@ -919,6 +919,16 @@ fn build_vowifi(raw: RawVowifi) -> BridgeResult<VowifiConfig> {
             }
             raw.register_request_uri
         },
+        access_network_info: {
+            let value = raw.access_network_info.trim();
+            if value.is_empty() || raw.access_network_info.chars().any(char::is_control) {
+                return Err(BridgeError::Config(format!(
+                    "vowifi.access_network_info must be a non-empty value with no control characters, got {:?}",
+                    raw.access_network_info
+                )));
+            }
+            value.to_string()
+        },
         gm_auth_alg: {
             const OK: [&str; 3] = ["", "hmac-sha-1-96", "hmac-md5-96"];
             if !OK.contains(&raw.gm_auth_alg.as_str()) {

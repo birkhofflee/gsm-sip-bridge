@@ -302,6 +302,10 @@ sec_agree = true
 #             predates the default change and was never reproduced; if an
 #             Airtel deployment regresses, set "pcscf" and capture it.
 register_request_uri = "home-domain"
+# P-Access-Network-Info on REGISTER and on the requests built from it, such as
+# the reg-event SUBSCRIBE and the answer to an inbound call. Outbound INVITE
+# always sends "IEEE-802.11". Change this only if a network rejects the default.
+access_network_info = "3GPP-WLAN"
 # Pin the Gm IPsec algorithms rather than following the P-CSCF's own q= order.
 # Leave empty (the default) to follow it. Set these only when a network
 # advertises a preference it does not actually use — the symptom is a

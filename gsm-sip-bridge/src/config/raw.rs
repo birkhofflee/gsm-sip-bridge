@@ -437,6 +437,9 @@ section! {
         /// for the captured evidence, and `AppConfig`'s field docs for why the
         /// default moved.
         pub register_request_uri: String,
+        /// `P-Access-Network-Info` value for this path. See
+        /// `VowifiConfig::access_network_info`.
+        pub access_network_info: String,
         /// Pin the Gm IPsec algorithms instead of following the network's own
         /// `q=` preference. Empty string = follow it. See
         /// `ims::gm_ipsec::select_security_server`.
@@ -517,6 +520,7 @@ impl Default for RawVowifi {
             use_tcp: true,
             sec_agree: true,
             register_request_uri: "home-domain".to_string(),
+            access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,

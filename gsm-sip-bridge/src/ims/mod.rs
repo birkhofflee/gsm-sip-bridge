@@ -89,7 +89,7 @@ const MAX_RESYNC_ATTEMPTS: u32 = 2;
 
 /// `P-Access-Network-Info` value for the ePDG/VoWiFi access leg. This is the
 /// value the registration path hard-coded before the field was configurable,
-/// so it remains the VoWiFi default (FR-019: no behavioural change).
+/// so it remains the default of `[vowifi].access_network_info`.
 pub const ACCESS_NETWORK_WLAN: &str = "3GPP-WLAN";
 
 /// Every method this UAS's `dispatch_loop` actually serves — the single
@@ -176,8 +176,8 @@ pub struct ImsRegisterConfig {
     /// Value for the `P-Access-Network-Info` header, describing the access
     /// network this registration is arriving over (TS 24.229 §7.2A.4).
     ///
-    /// `ACCESS_NETWORK_WLAN` for the ePDG/VoWiFi path — which is what every
-    /// caller sent before this field existed, so it is what they still send.
+    /// `[vowifi].access_network_info` for the ePDG/VoWiFi path, which defaults
+    /// to `ACCESS_NETWORK_WLAN`.
     /// The LTE path supplies an E-UTRAN value instead; see
     /// `crate::volte::pani::access_network_info`.
     pub access_network_info: String,
