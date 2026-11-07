@@ -86,6 +86,7 @@ async fn failed_delivery_is_retried_then_succeeds_then_recovers() {
             default_webhook_url: Secret::new(String::new()),
             instance_name: None,
             event_retention_days: 30,
+            telegram: None,
             sms: enabled(None),
             module_lifecycle: CategoryAlertConfig {
                 enabled: false,

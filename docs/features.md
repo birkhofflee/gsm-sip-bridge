@@ -76,7 +76,8 @@ re-bridging audio the modem has already decoded.
   does not send SMS.
 - SQLite store: calls (caller ID, line, duration, outcome), SMS, card slots and
   per-slot network mode. sqlite-web is included for read-only browsing.
-- Telegram bot: SMS as plain-text messages, as an alternative to Discord.
+- Telegram bot: SMS and critical alerts as plain-text messages, as an
+  alternative to Discord.
 - Discord webhooks: SMS as embeds, plus alerts for module/SIM lifecycle,
   registration loss, tunnel failure, missed calls, line discovery failure and Gm
   connection loss. Each has its own enable flag, threshold and webhook override,

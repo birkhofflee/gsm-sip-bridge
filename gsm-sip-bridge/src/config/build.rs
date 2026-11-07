@@ -359,6 +359,45 @@ fn is_telegram_chat_id(chat_id: &str) -> bool {
     }
 }
 
+/// `[alerts]`'s Telegram target: its own settings when either is set, else
+/// `[sms]`'s. Alerts are auxiliary, so a bad setting here is logged and turns
+/// Telegram alerts off rather than stopping the bridge.
+fn build_alerts_telegram(
+    token: Option<Secret<String>>,
+    chat_id: Option<String>,
+    sms: &SmsConfig,
+) -> Option<TelegramTarget> {
+    let token = token.filter(|t| !t.expose_secret().is_empty());
+    let chat_id = chat_id.filter(|c| !c.is_empty());
+    let (bot_token, chat_id) = match (token, chat_id) {
+        (Some(t), Some(c)) => (t, c),
+        (None, None) if !sms.telegram_chat_id.is_empty() => {
+            (sms.telegram_bot_token.clone(), sms.telegram_chat_id.clone())
+        }
+        (None, None) => return None,
+        _ => {
+            tracing::error!(
+                "alerts.telegram_bot_token and alerts.telegram_chat_id must be set \
+                 together; Telegram alerts are off for this run"
+            );
+            return None;
+        }
+    };
+    if !is_telegram_token(bot_token.expose_secret()) || !is_telegram_chat_id(&chat_id) {
+        // Never echoes the token: this reaches logs.
+        tracing::error!(
+            "alerts.telegram_bot_token or alerts.telegram_chat_id is malformed; \
+             Telegram alerts are off for this run"
+        );
+        return None;
+    }
+    Some(TelegramTarget {
+        bot_token,
+        chat_id,
+        api_base: super::TELEGRAM_API_BASE.to_string(),
+    })
+}
+
 /// Never echoes the token: this error reaches logs.
 fn validate_sms_notifier(raw: &RawSms) -> BridgeResult<()> {
     let token = raw.telegram_bot_token.expose_secret();
@@ -731,6 +770,37 @@ fn legacy_sms_category(sms: &SmsConfig) -> CategoryAlertConfig {
 }
 
 fn build_alerts(raw: RawAlerts, sms: &SmsConfig) -> AlertsConfig {
+    let mut alerts = build_alerts_discord(raw.clone(), sms);
+    alerts.telegram = build_alerts_telegram(raw.telegram_bot_token, raw.telegram_chat_id, sms);
+    if alerts.telegram.is_some() && alerts_have_a_discord_webhook(&alerts) {
+        tracing::warn!(
+            "critical alerts go to Telegram; the Discord webhooks under [alerts] are ignored"
+        );
+    }
+    alerts
+}
+
+fn alerts_have_a_discord_webhook(a: &AlertsConfig) -> bool {
+    let set = |c: &CategoryAlertConfig| {
+        c.webhook_url_override
+            .as_ref()
+            .is_some_and(|w| !w.expose_secret().is_empty())
+    };
+    !a.default_webhook_url.expose_secret().is_empty()
+        || [
+            &a.module_lifecycle,
+            &a.registration_loss,
+            &a.tunnel_failure,
+            &a.missed_call,
+            &a.line_discovery_failed,
+            &a.gm_connection_lost,
+            &a.pcscf_pool_exhausted,
+        ]
+        .into_iter()
+        .any(set)
+}
+
+fn build_alerts_discord(raw: RawAlerts, sms: &SmsConfig) -> AlertsConfig {
     let d = AlertsConfig::default();
 
     let sms_cat = match raw.sms {
@@ -836,6 +906,7 @@ fn build_alerts(raw: RawAlerts, sms: &SmsConfig) -> AlertsConfig {
         registration_loss_thresholds,
         gm_connection_lost_thresholds,
         pcscf_pool_exhausted_thresholds,
+        telegram: None,
     }
 }
 

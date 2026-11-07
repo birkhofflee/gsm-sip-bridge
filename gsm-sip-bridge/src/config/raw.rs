@@ -421,6 +421,9 @@ section! {
         /// given up on every P-CSCF. Measured from the first such rebuild, so
         /// it too carries `unhealthy_sec`.
         pub pcscf_pool_exhausted: Option<RawUnhealthyCategory>,
+        /// Telegram for critical alerts. See `AlertsConfig::telegram`.
+        pub telegram_bot_token: Option<Secret<String>>,
+        pub telegram_chat_id: Option<String>,
     }
 }
 

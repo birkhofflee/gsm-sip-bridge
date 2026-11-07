@@ -52,8 +52,8 @@ The bridge reads a single TOML configuration file specified via `--config`.
 | `retry_interval_sec` | integer | 3600 | Interval of the background retry sweep, per process that owns an SMS notifier (range 60-86400) |
 | `retry_max_age_sec` | integer | 604800 | A text still undelivered this long after it was received is marked `abandoned` (range 3600-2592000) |
 
-Critical-event alerts under `[alerts]` remain Discord-only, whichever service
-receives SMS.
+Critical-event alerts under `[alerts]` follow the `[sms]` Telegram bot when
+one is set; see `[alerts]` below.
 
 **Retry behaviour.** A text whose notification fails stays in the store as
 `failed` with the reason in `last_error`. Undelivered texts are re-posted
@@ -75,6 +75,8 @@ clears — never a repeating stream while a condition stays unhealthy.
 | Key | Type | Default | Description |
 |---|---|---|---|
 | `discord_webhook_url` | string | `""` | Shared default webhook for any category below with no override of its own. Supports `env:VAR` syntax |
+| `telegram_bot_token` | string | (from `[sms]`) | Send every enabled category to Telegram instead of Discord. Set with `telegram_chat_id`. When neither is set here, the `[sms]` Telegram settings are used. Discord webhooks in `[alerts]` are then ignored. A malformed value turns Telegram alerts off and logs an error. Supports `env:VAR` syntax |
+| `telegram_chat_id` | string | (from `[sms]`) | Chat for critical alerts, in the same form as `[sms].telegram_chat_id` |
 | `event_retention_days` | integer | 30 | How many days the web UI's events timeline keeps rows. Pruned at startup and every 6 hours. Minimum 1; a lower value falls back to the default |
 | `instance_name` | string | (host hostname) | Name identifying this deployment, shown in every alert footer as `gsm-sip-bridge · <instance_name>`. Falls back to the system hostname when unset — set it explicitly under Docker, where the hostname is a random container id |
 

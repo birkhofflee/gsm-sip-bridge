@@ -89,6 +89,13 @@ discord_webhook_url = "env:DISCORD_WEBHOOK_URL"
 # How many days the web UI's events timeline keeps rows (specs/122). Minimum 1.
 # event_retention_days = 30
 
+# Send critical alerts to Telegram instead of Discord. Unset, they use the
+# [sms] Telegram bot when one is configured there; any Discord webhooks in this
+# section are then ignored. A malformed value turns Telegram alerts off and
+# logs an error, without stopping the bridge.
+# telegram_bot_token = "env:TELEGRAM_ALERTS_BOT_TOKEN"
+# telegram_chat_id = "env:TELEGRAM_ALERTS_CHAT_ID"
+
 [alerts.sms]
 enabled = true                  # default true; matches [sms].enabled above
 # discord_webhook_url = "env:DISCORD_ALERTS_SMS_WEBHOOK_URL"   # optional override

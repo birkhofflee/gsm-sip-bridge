@@ -4,7 +4,8 @@
 //! as a [`Secret`] and every error from the shared POST loop has its URL
 //! stripped before it can reach a log (`post_json_with_retry`).
 
-use crate::alerts::discord::{post_json_with_retry, PostError};
+use crate::alerts::discord::{category_title, phone_field, post_json_with_retry, PostError};
+use crate::alerts::{CriticalEvent, CriticalEventKind};
 use crate::config::secret::Secret;
 use crate::error::{BridgeError, BridgeResult};
 use std::time::Duration;
@@ -87,6 +88,21 @@ impl TelegramClient {
             "text": text,
             "link_preview_options": { "is_disabled": true },
         });
+        self.post(payload).await
+    }
+
+    /// A critical alert, in `DiscordClient::send_alert`'s result shape.
+    pub async fn send_alert(&self, event: &CriticalEvent) -> Result<u16, String> {
+        let text = render_alert(event, &self.instance);
+        let payload = serde_json::json!({
+            "chat_id": self.chat_id,
+            "text": text,
+            "link_preview_options": { "is_disabled": true },
+        });
+        self.post(payload).await.map_err(|e| e.to_string())
+    }
+
+    async fn post(&self, payload: serde_json::Value) -> Result<u16, PostError> {
         post_json_with_retry(
             &self.client,
             self.send_message_url.expose_secret(),
@@ -95,6 +111,26 @@ impl TelegramClient {
         )
         .await
     }
+}
+
+fn render_alert(event: &CriticalEvent, instance: &str) -> String {
+    let prefix = match event.kind {
+        CriticalEventKind::Failure => "Critical",
+        CriticalEventKind::Recovered => "Recovered",
+    };
+    let head = format!("{prefix}: {}\n\n", category_title(event.category));
+    let mut tail = format!("\n\nCategory: {}", event.category.as_str());
+    if let Some(unit) = &event.unit_id {
+        tail.push_str(&format!(" · Line: {unit}"));
+    }
+    tail.push_str(&format!(
+        " · Phone: {}\n{}\ngsm-sip-bridge · {instance}",
+        phone_field(event.phone_number.as_deref()),
+        event.at.to_rfc3339(),
+    ));
+    let used = head.encode_utf16().count() + tail.encode_utf16().count();
+    let description = truncate_utf16(&event.description, MAX_TEXT_LEN.saturating_sub(used));
+    format!("{head}{description}{tail}")
 }
 
 fn render_text(
@@ -158,6 +194,33 @@ mod tests {
             late,
             "bridge-01",
         )
+    }
+
+    #[test]
+    fn an_alert_names_its_kind_category_line_and_instance() {
+        let event = CriticalEvent {
+            category: crate::alerts::AlertCategory::TunnelFailure,
+            unit_id: Some("ec20-33".into()),
+            description: "tunnel down for 300s".into(),
+            phone_number: None,
+            at: chrono::Utc::now(),
+            kind: CriticalEventKind::Failure,
+        };
+        let text = render_alert(&event, "bridge-01");
+        assert!(
+            text.starts_with("Critical: VoWiFi Tunnel Failure\n\ntunnel down"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Category: tunnel_failure · Line: ec20-33"),
+            "{text}"
+        );
+        assert!(text.ends_with("gsm-sip-bridge · bridge-01"), "{text}");
+        let recovered = CriticalEvent {
+            kind: CriticalEventKind::Recovered,
+            ..event
+        };
+        assert!(render_alert(&recovered, "i").starts_with("Recovered: "));
     }
 
     #[test]

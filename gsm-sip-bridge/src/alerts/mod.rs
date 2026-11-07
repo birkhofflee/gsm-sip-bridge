@@ -318,19 +318,56 @@ pub async fn deliver(
     event: CriticalEvent,
 ) -> AlertOutcome {
     let cfg = category_config(config, event.category);
-    let outcome = match precheck(cfg, &config.default_webhook_url) {
+    let outcome = match (&config.telegram, cfg.enabled) {
+        (Some(target), true) => send_telegram_alert(target, client.instance(), &event).await,
+        _ => deliver_discord(client, config, cfg, &event).await,
+    };
+    record_delivery(&event, outcome)
+}
+
+/// Built per alert: alerts are rare, and the target lives in the config every
+/// caller already passes, so no caller needs a second client.
+async fn send_telegram_alert(
+    target: &crate::config::TelegramTarget,
+    instance: &str,
+    event: &CriticalEvent,
+) -> AlertOutcome {
+    match crate::sms::telegram::TelegramClient::with_api_base(
+        &target.api_base,
+        &target.bot_token,
+        target.chat_id.clone(),
+        instance.to_string(),
+    ) {
+        Ok(client) => match client.send_alert(event).await {
+            Ok(status) => AlertOutcome::Sent(status),
+            Err(e) => AlertOutcome::Failed(e.to_string()),
+        },
+        Err(e) => AlertOutcome::Failed(e.to_string()),
+    }
+}
+
+async fn deliver_discord(
+    client: &discord::DiscordClient,
+    config: &AlertsConfig,
+    cfg: &CategoryAlertConfig,
+    event: &CriticalEvent,
+) -> AlertOutcome {
+    match precheck(cfg, &config.default_webhook_url) {
         Some(outcome) => outcome,
         None => {
             let webhook = resolve_webhook(cfg, &config.default_webhook_url)
                 .expect("precheck already confirmed a webhook resolves")
                 .to_string();
-            match client.send_alert(&webhook, &event).await {
+            match client.send_alert(&webhook, event).await {
                 Ok(status) => AlertOutcome::Sent(status),
                 Err(e) => AlertOutcome::Failed(e),
             }
         }
-    };
+    }
+}
 
+/// Metrics and the log line for one delivery decision.
+fn record_delivery(event: &CriticalEvent, outcome: AlertOutcome) -> AlertOutcome {
     crate::metrics::CRITICAL_ALERTS_TOTAL
         .with_label_values(&[event.category.as_str(), outcome.as_label()])
         .inc();

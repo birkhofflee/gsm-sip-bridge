@@ -106,6 +106,11 @@ impl DiscordClient {
         })
     }
 
+    /// This deployment's instance label, for a notifier that is not Discord.
+    pub fn instance(&self) -> &str {
+        &self.instance
+    }
+
     /// The embed footer shown on every alert: the shared product name plus this
     /// deployment's instance label (specs/034-alert-identity, FR-006).
     fn footer(&self) -> serde_json::Value {
@@ -332,14 +337,14 @@ pub(crate) async fn post_json_with_retry(
 /// The value for an embed's `Phone` field (specs/034-alert-identity, FR-005):
 /// the resolved number when present and non-empty, else the literal
 /// `unknown` — never a fabricated or empty-looking value.
-fn phone_field(phone_number: Option<&str>) -> String {
+pub(crate) fn phone_field(phone_number: Option<&str>) -> String {
     match phone_number.map(str::trim) {
         Some(n) if !n.is_empty() => n.to_string(),
         _ => crate::alerts::UNKNOWN_IDENTITY.to_string(),
     }
 }
 
-fn category_title(category: AlertCategory) -> &'static str {
+pub(crate) fn category_title(category: AlertCategory) -> &'static str {
     match category {
         AlertCategory::Sms => "SMS",
         AlertCategory::ModuleLifecycle => "Module/Modem Lifecycle Failure",

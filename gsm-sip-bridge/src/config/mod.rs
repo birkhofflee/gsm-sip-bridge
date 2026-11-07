@@ -691,7 +691,22 @@ pub struct AlertsConfig {
     pub registration_loss_thresholds: RegistrationLossThresholds,
     pub gm_connection_lost_thresholds: GmConnectionLostThresholds,
     pub pcscf_pool_exhausted_thresholds: PcscfPoolExhaustedThresholds,
+    /// Send every enabled category to Telegram instead of Discord. Taken from
+    /// `[alerts]` when set there, else from `[sms]`'s Telegram settings.
+    pub telegram: Option<TelegramTarget>,
 }
+
+/// Where critical alerts go when Telegram is configured for them.
+#[derive(Clone, Debug)]
+pub struct TelegramTarget {
+    pub bot_token: Secret<String>,
+    pub chat_id: String,
+    /// The Bot API server. Always the real one from config; tests point it at
+    /// a local stand-in.
+    pub api_base: String,
+}
+
+pub const TELEGRAM_API_BASE: &str = "https://api.telegram.org";
 
 #[derive(Clone, Debug)]
 pub struct CategoryAlertConfig {
@@ -813,6 +828,7 @@ impl Default for AlertsConfig {
             registration_loss_thresholds: RegistrationLossThresholds::default(),
             gm_connection_lost_thresholds: GmConnectionLostThresholds::default(),
             pcscf_pool_exhausted_thresholds: PcscfPoolExhaustedThresholds::default(),
+            telegram: None,
         }
     }
 }
@@ -2825,6 +2841,40 @@ password = "pass"
     }
 
     const TOKEN: &str = "123456:AAFakeTokenForTests_-";
+
+    fn alerts_with(sms: &str, alerts: &str) -> AlertsConfig {
+        let src = format!("{MINIMAL_TOML}\n[sms]\n{sms}\n[alerts]\n{alerts}\n");
+        parse(&src).alerts
+    }
+
+    #[test]
+    fn alerts_inherit_the_sms_telegram_bot_when_alerts_name_none() {
+        let sms = format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"1234\"");
+        let t = alerts_with(&sms, "")
+            .telegram
+            .expect("inherited from [sms]");
+        assert_eq!(t.chat_id, "1234");
+        assert_eq!(t.api_base, TELEGRAM_API_BASE);
+        assert!(alerts_with("", "").telegram.is_none());
+    }
+
+    #[test]
+    fn alerts_prefer_their_own_telegram_settings() {
+        let sms = format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"1234\"");
+        let own = format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"-99\"");
+        assert_eq!(alerts_with(&sms, &own).telegram.unwrap().chat_id, "-99");
+    }
+
+    #[test]
+    fn a_bad_alerts_telegram_setting_turns_telegram_alerts_off_without_failing() {
+        for own in [
+            format!("telegram_bot_token = \"{TOKEN}\""),
+            "telegram_chat_id = \"1234\"".to_string(),
+            "telegram_bot_token = \"bad\"\ntelegram_chat_id = \"1234\"".to_string(),
+        ] {
+            assert!(alerts_with("", &own).telegram.is_none(), "{own}");
+        }
+    }
 
     #[test]
     fn telegram_is_off_by_default_and_configures_a_notifier_when_set() {
