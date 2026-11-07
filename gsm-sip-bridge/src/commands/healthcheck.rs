@@ -122,6 +122,12 @@ pub enum Health {
         line_faults: Vec<(u32, LineFault)>,
         configured_failed: Vec<String>,
     },
+    /// No line is running, yet discovery found a modem and turned it away
+    /// (`card_id: reason`). Distinct from finding no modem at all, which stays
+    /// healthy: a deployment may run with no modem attached.
+    NoUsableLine {
+        rejected: Vec<String>,
+    },
 }
 
 impl Health {
@@ -358,6 +364,15 @@ pub fn evaluate_with_metrics(
         .collect();
 
     if resolution.lines.is_empty() && configured_failed.is_empty() && expired.is_empty() {
+        let rejected: Vec<String> = resolution
+            .failed
+            .iter()
+            .filter(|f| f.reason != "max_lines_exceeded")
+            .map(|f| format!("{}: {}", f.card_id, f.reason))
+            .collect();
+        if !rejected.is_empty() {
+            return Health::NoUsableLine { rejected };
+        }
         return if cs_enabled {
             Health::Healthy
         } else {
@@ -507,6 +522,12 @@ pub fn run(cli: &Cli) -> ExitCode {
             }
             for identifier in configured_failed {
                 eprintln!("configured line {identifier}: not running");
+            }
+            ExitCode::FAILURE
+        }
+        Health::NoUsableLine { rejected } => {
+            for modem in rejected {
+                eprintln!("no VoWiFi line running; modem {modem}");
             }
             ExitCode::FAILURE
         }
@@ -832,6 +853,35 @@ mod tests {
 
     /// The spec's degrade clarification: zero usable lines is a *reported*
     /// condition, not a container-failing one.
+    #[test]
+    fn a_modem_turned_away_with_no_line_running_is_unhealthy() {
+        let runner = MockCommandRunner::new();
+        let mut r = resolution(vec![]);
+        r.failed = vec![crate::vowifi::discovery::FailedLine::new(
+            "ec20-33",
+            "sim_absent",
+        )];
+        let health = evaluate(&runner, true, false, true, &r, "strongswan");
+        assert_eq!(
+            health,
+            Health::NoUsableLine {
+                rejected: vec!["ec20-33: sim_absent".to_string()],
+            }
+        );
+        assert!(!health.is_healthy());
+    }
+
+    #[test]
+    fn a_modem_that_only_lost_a_capacity_cut_is_not_a_failure() {
+        let runner = MockCommandRunner::new();
+        let mut r = resolution(vec![]);
+        r.failed = vec![crate::vowifi::discovery::FailedLine::new(
+            "ec20-33",
+            "max_lines_exceeded",
+        )];
+        assert!(evaluate(&runner, true, true, true, &r, "strongswan").is_healthy());
+    }
+
     #[test]
     fn zero_resolved_lines_is_healthy_not_a_container_failure() {
         let runner = MockCommandRunner::new();

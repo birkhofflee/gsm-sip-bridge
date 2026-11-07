@@ -735,6 +735,22 @@ re-scan on its own mid-run, **unless** this was the *only* configured
 VoWiFi line and it was still missing when the container started — see the
 next section, which covers that case without a restart.
 
+### VoWiFi: no line at startup, with auto-discovery
+
+With no `[[vowifi.line]]` override and `[cs].enabled = false`, a start that
+resolves zero lines keeps retrying `discover`: every ~10s for ~3 minutes,
+then every minute, until a line resolves. The VoWiFi subsystem then starts
+with no restart. The container log shows why each pass turned the modem away
+(`[supervise] discover: <card> not used as a line: <reason>`, then
+`line discovery: still no line (...)` whenever the reasons change). With
+`[alerts.line_discovery_failed].enabled = true`, one alert fires after the
+first ~3 minutes and a recovery notice when the line starts.
+
+While a modem is present but turned away (for example `sim_absent`), the
+`HEALTHCHECK` reports unhealthy. Finding no modem at all stays healthy, as
+before. With the circuit-switched path on, this retry does not run, because
+the daemon's own rescans may legitimately claim the modem.
+
 ### VoWiFi: a configured line was missing at startup ("NOT RUNNING" / `not_found`)
 
 specs/027-discover-retry-health closes the gap the previous section still

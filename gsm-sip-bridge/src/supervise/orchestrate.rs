@@ -92,6 +92,14 @@ const DISCOVER_RETRY_WINDOW: Duration = Duration::from_secs(180);
 /// How often `spawn_discover_retry` re-runs `discover` while a configured
 /// line is still missing.
 const DISCOVER_RETRY_POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// How often the auto-discovery retry re-runs `discover` once
+/// `DISCOVER_RETRY_WINDOW` has passed. Slower than the first window: each pass
+/// probes every candidate port, and a modem missing that long is rarely about
+/// to appear.
+const AUTO_DISCOVER_SLOW_POLL_INTERVAL: Duration = Duration::from_secs(60);
+/// `unit_id` of the auto-discovery `LineDiscoveryFailed` alert, which has no
+/// configured identifier to name.
+const AUTO_DISCOVERY_UNIT: &str = "auto-discovery";
 
 /// This line's swanctl connection and child name.
 ///
@@ -633,6 +641,17 @@ fn spawn_discover_retry(
         .map(|f| (f.card_id, deadline))
         .collect();
     if pending.is_empty() {
+        if auto_discovery_retry_applies(config) {
+            spawn_auto_discover_retry(
+                runner,
+                bin,
+                config_path_str,
+                config,
+                started,
+                shutting_down,
+                alert_ctx,
+            );
+        }
         return;
     }
 
@@ -738,6 +757,152 @@ fn spawn_discover_retry(
                 // hot-added (charon just started) — stop watching entirely.
                 return;
             }
+        }
+    });
+}
+
+/// Whether a zero-line start should keep re-running `discover` with no
+/// configured line to wait for. Only for auto-discovery (no `[[vowifi.line]]`
+/// override, which `spawn_discover_retry` already handles) and only with the
+/// circuit-switched path off: with it on, the daemon's own rescans probe the
+/// same ports and may legitimately claim the modem, which a late `discover`
+/// must not race (research.md item 3 of specs/013-multi-card-vowifi).
+fn auto_discovery_retry_applies(config: &AppConfig) -> bool {
+    config.vowifi.line_overrides.is_empty() && !config.cs.enabled
+}
+
+/// `DISCOVER_RETRY_POLL_INTERVAL` for the first `DISCOVER_RETRY_WINDOW`, the
+/// slower `AUTO_DISCOVER_SLOW_POLL_INTERVAL` after.
+fn auto_discover_poll_interval(elapsed: Duration) -> Duration {
+    if elapsed < DISCOVER_RETRY_WINDOW {
+        DISCOVER_RETRY_POLL_INTERVAL
+    } else {
+        AUTO_DISCOVER_SLOW_POLL_INTERVAL
+    }
+}
+
+/// One line per rejected modem, for the log and the alert. `"none"` when
+/// discovery saw no modem at all.
+fn rejection_summary(failed: &[crate::vowifi::discovery::FailedLine]) -> String {
+    if failed.is_empty() {
+        return "no modem found".to_string();
+    }
+    failed
+        .iter()
+        .map(|f| format!("{}: {}", f.card_id, f.reason))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// The auto-discovery counterpart of `spawn_discover_retry`: re-runs `discover`
+/// until any line resolves, then starts the subsystem once and stops. Safe for
+/// the same reason that one is: nothing has started this run.
+///
+/// Live motivation: on a deployment with a single auto-discovered EC20-class
+/// modem, some starts resolved zero lines while a `discover` seconds later
+/// found the line; before this the run stayed VoWiFi-less until a manual
+/// restart. Keeps watching past `DISCOVER_RETRY_WINDOW` (one alert then), at
+/// the slower interval, so a late recovery still starts the line.
+fn spawn_auto_discover_retry(
+    runner: &Arc<dyn CommandRunner>,
+    bin: &str,
+    config_path_str: &str,
+    config: &AppConfig,
+    started: &Arc<Mutex<StartedState>>,
+    shutting_down: &Arc<RwLock<bool>>,
+    alert_ctx: Option<&AlertContext>,
+) {
+    let lines_file = crate::modules::discovery::lines_file_path();
+    let runner = Arc::clone(runner);
+    let bin = bin.to_string();
+    let config_path_str = config_path_str.to_string();
+    let config = config.clone();
+    let started = Arc::clone(started);
+    let shutting_down = Arc::clone(shutting_down);
+    let alert_ctx = alert_ctx.cloned();
+    println!(
+        "[supervise] line discovery: no line yet; retrying discovery every {}s",
+        DISCOVER_RETRY_POLL_INTERVAL.as_secs()
+    );
+    std::thread::spawn(move || {
+        let began = std::time::Instant::now();
+        let mut alerted = false;
+        let mut last_summary = String::new();
+        loop {
+            if *shutting_down.read().unwrap() {
+                return;
+            }
+            runner.sleep(auto_discover_poll_interval(began.elapsed()));
+            if *shutting_down.read().unwrap() {
+                return;
+            }
+            match runner.run(&[&bin, "--config", &config_path_str, "discover"]) {
+                Ok(o) if o.status.success() => {}
+                _ => {
+                    eprintln!("[supervise] line discovery: retry re-run of 'discover' failed");
+                    continue;
+                }
+            }
+            let Ok(resolution) = crate::vowifi::discovery::read_line_resolution(&lines_file) else {
+                continue;
+            };
+            if resolution.lines.is_empty() {
+                let summary = rejection_summary(&resolution.failed);
+                if summary != last_summary {
+                    println!("[supervise] line discovery: still no line ({summary})");
+                    last_summary = summary.clone();
+                }
+                if !alerted && began.elapsed() >= DISCOVER_RETRY_WINDOW {
+                    alerted = true;
+                    if let Some(ctx) = &alert_ctx {
+                        ctx.fire(alerts::CriticalEvent {
+                            category: alerts::AlertCategory::LineDiscoveryFailed,
+                            unit_id: Some(AUTO_DISCOVERY_UNIT.to_string()),
+                            description: format!(
+                                "no VoWiFi line was discovered after {DISCOVER_RETRY_WINDOW:?} of retrying ({summary}); still retrying"
+                            ),
+                            phone_number: None,
+                            at: chrono::Utc::now(),
+                            kind: alerts::CriticalEventKind::Failure,
+                        });
+                    }
+                }
+                continue;
+            }
+
+            println!(
+                "[supervise] line discovery: {} line(s) found on retry after {}s — starting the VoWiFi subsystem",
+                resolution.lines.len(),
+                began.elapsed().as_secs()
+            );
+            if let Err(msg) = start_vowifi_subsystem(
+                &resolution.lines,
+                &runner,
+                &bin,
+                &config_path_str,
+                &config,
+                &started,
+                &shutting_down,
+                alert_ctx.as_ref(),
+            ) {
+                eprintln!(
+                    "[supervise] FATAL: retried VoWiFi line(s) found but failed to start: {msg}"
+                );
+            }
+            if alerted {
+                if let Some(ctx) = &alert_ctx {
+                    ctx.fire(alerts::CriticalEvent {
+                        category: alerts::AlertCategory::LineDiscoveryFailed,
+                        unit_id: Some(AUTO_DISCOVERY_UNIT.to_string()),
+                        description: "a VoWiFi line was discovered and started after retrying"
+                            .to_string(),
+                        phone_number: None,
+                        at: chrono::Utc::now(),
+                        kind: alerts::CriticalEventKind::Recovered,
+                    });
+                }
+            }
+            return;
         }
     });
 }
@@ -875,6 +1040,14 @@ pub fn run(config_path: &Path) -> std::process::ExitCode {
                     "[supervise] discover: LINE_COUNT={}",
                     resolution.lines.len()
                 );
+                // Why a modem was turned away; otherwise only the count reaches
+                // the container log and a zero-line start cannot be diagnosed.
+                for f in &resolution.failed {
+                    println!(
+                        "[supervise] discover: {} not used as a line: {}",
+                        f.card_id, f.reason
+                    );
+                }
                 vowifi_lines = resolution.lines;
             }
             Err(e) => {
@@ -3723,6 +3896,62 @@ mod tests {
     /// rejection now — live testing found `sim_unreadable` reachable this
     /// way) without it ever actually becoming a resolved line. Must still
     /// count as missing.
+    #[test]
+    fn auto_discovery_retries_quickly_then_slowly() {
+        assert_eq!(
+            auto_discover_poll_interval(Duration::ZERO),
+            DISCOVER_RETRY_POLL_INTERVAL
+        );
+        assert_eq!(
+            auto_discover_poll_interval(DISCOVER_RETRY_WINDOW - Duration::from_secs(1)),
+            DISCOVER_RETRY_POLL_INTERVAL
+        );
+        assert_eq!(
+            auto_discover_poll_interval(DISCOVER_RETRY_WINDOW),
+            AUTO_DISCOVER_SLOW_POLL_INTERVAL
+        );
+    }
+
+    #[test]
+    fn auto_discovery_retry_needs_no_overrides_and_the_circuit_switched_path_off() {
+        let mut config = test_config();
+        config.vowifi.enabled = true;
+        config.cs.enabled = false;
+        assert!(auto_discovery_retry_applies(&config));
+
+        config.cs.enabled = true;
+        assert!(
+            !auto_discovery_retry_applies(&config),
+            "would race the CS daemon"
+        );
+
+        config.cs.enabled = false;
+        config
+            .vowifi
+            .line_overrides
+            .push(crate::config::VowifiLineOverride {
+                modem_port: Some("/dev/ttyUSB3".into()),
+                ..Default::default()
+            });
+        assert!(
+            !auto_discovery_retry_applies(&config),
+            "pinned lines have their own retry"
+        );
+    }
+
+    #[test]
+    fn rejection_summary_names_each_modem_and_says_when_there_was_none() {
+        use crate::vowifi::discovery::FailedLine;
+        assert_eq!(rejection_summary(&[]), "no modem found");
+        assert_eq!(
+            rejection_summary(&[
+                FailedLine::new("ec20-33", "sim_absent"),
+                FailedLine::new("ec20-44", "no_at_port"),
+            ]),
+            "ec20-33: sim_absent; ec20-44: no_at_port"
+        );
+    }
+
     #[test]
     fn still_missing_from_resolution_stays_missing_when_the_failure_reason_changes() {
         let pending = std::collections::HashMap::from([(
