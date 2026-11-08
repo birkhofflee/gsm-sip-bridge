@@ -368,6 +368,15 @@ pub(crate) struct GmSa {
     pub(crate) security_verify: String,
 }
 
+/// Every `<uri>` in every `P-Associated-URI` header, in order (RFC 7315 §4.1:
+/// one header may list several, comma-separated).
+fn associated_uris(headers: &[(String, String)]) -> impl Iterator<Item = &str> {
+    headers
+        .iter()
+        .filter(|(k, _)| k.eq_ignore_ascii_case("P-Associated-URI"))
+        .flat_map(|(_, v)| v.split('<').skip(1).filter_map(|s| s.split('>').next()))
+}
+
 /// `+` and 6-15 digits from a `sip:+…@host` or `tel:+…` identity, dropping
 /// parameters (TS 23.003 / E.164 bounds). Anything else is not a number.
 pub(crate) fn number_from_identity(identity: &str) -> Option<String> {
@@ -421,13 +430,12 @@ impl RegisteredSession {
         self.gm_state.as_ref().map(|g| g.security_verify.as_str())
     }
 
-    /// The line's own number, `+` and digits, from the registrar's default
-    /// identity: what a SIM that stores no MSISDN can still tell us. `None`
-    /// when that identity is not a number (an IMSI-based or named one).
+    /// The line's own number, `+` and digits: the first numeric identity the
+    /// registrar lists in `P-Associated-URI`, which a SIM that stores no
+    /// MSISDN can still tell us. Every listed identity is considered, not just
+    /// the first, which may be IMSI-based. `None` when none is a number.
     pub(crate) fn line_number(&self) -> Option<String> {
-        self.default_impu()
-            .as_deref()
-            .and_then(number_from_identity)
+        associated_uris(&self.headers).find_map(number_from_identity)
     }
 
     /// First `sip:` `P-Associated-URI` from the REGISTER `200 OK`, scheme
@@ -2169,6 +2177,35 @@ mod tests {
         assert!(status.registered_at.is_none());
         assert!(status.expires_at.is_none());
         assert!(status.last_failure.is_none());
+    }
+
+    #[test]
+    fn the_line_number_skips_a_non_numeric_first_associated_uri() {
+        let headers = vec![
+            ("Via".to_string(), "SIP/2.0/TCP x".to_string()),
+            (
+                "P-Associated-URI".to_string(),
+                "<sip:404430000000000@ims.example>, <sip:+919000000000@ims.example>".to_string(),
+            ),
+            (
+                "p-associated-uri".to_string(),
+                "<tel:+919000000001>".to_string(),
+            ),
+        ];
+        assert_eq!(
+            associated_uris(&headers).collect::<Vec<_>>(),
+            [
+                "sip:404430000000000@ims.example",
+                "sip:+919000000000@ims.example",
+                "tel:+919000000001"
+            ]
+        );
+        assert_eq!(
+            associated_uris(&headers)
+                .find_map(number_from_identity)
+                .as_deref(),
+            Some("+919000000000")
+        );
     }
 
     #[test]

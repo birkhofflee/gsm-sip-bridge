@@ -718,6 +718,9 @@ fn store_view(report: &AgentReport) {
         if d.plmn.is_some() {
             kept.plmn = d.plmn.clone();
         }
+        if d.msisdn.is_some() {
+            kept.msisdn = d.msisdn.clone();
+        }
         if d.signal.is_some() {
             kept.signal = d.signal.clone();
         }
@@ -1786,6 +1789,37 @@ mod tests {
             .with_label_values(&["test-ingest-calls", "answered", "vowifi"])
             .get();
         assert_eq!(after, before + 1.0);
+    }
+
+    /// Through the real merge: a field `AgentDetails` grows must also be kept
+    /// here, or the web UI never sees it.
+    #[test]
+    fn a_reported_line_number_survives_into_the_snapshot_and_is_kept() {
+        let module = "test-ingest-msisdn";
+        let report = |seq, msisdn: Option<&str>| AgentReport {
+            agent: AgentKind::Ims,
+            module_id: module.to_string(),
+            epoch: 7,
+            seq,
+            state: AgentState::default(),
+            events: vec![],
+            dropped: 0,
+            details: Some(crate::control::protocol::AgentDetails {
+                msisdn: msisdn.map(str::to_string),
+                ..Default::default()
+            }),
+        };
+        let number = |snaps: Vec<AgentSnapshot>| {
+            snaps
+                .into_iter()
+                .find(|s| s.module_id == module)
+                .and_then(|s| s.details.msisdn)
+        };
+        apply_report(&report(1, Some("+919000000000")));
+        assert_eq!(number(snapshot_lines()).as_deref(), Some("+919000000000"));
+        // A later report that names no number keeps the last one.
+        apply_report(&report(2, None));
+        assert_eq!(number(snapshot_lines()).as_deref(), Some("+919000000000"));
     }
 
     #[test]
