@@ -512,6 +512,10 @@ pub enum ObservedEvent {
     CallCompleted {
         status: CallStatus,
         duration_seconds: f64,
+        /// Who called, for a call that was never answered: the daemon raises
+        /// the missed-call alert from it. Absent from older agents' reports.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caller: Option<String>,
     },
     PbxLegCompleted {
         outcome: SmsOutcome,

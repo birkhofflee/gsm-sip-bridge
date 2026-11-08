@@ -254,6 +254,56 @@ pub fn apply_report(report: &AgentReport) {
     for (key, category, kind, generation) in transitions {
         dispatch_transition(key, category, kind, generation);
     }
+    for event in &report.events {
+        if let ObservedEvent::CallCompleted {
+            status: CallStatus::Missed,
+            caller,
+            ..
+        } = event
+        {
+            dispatch_missed_call(&report.module_id, caller.as_deref());
+        }
+    }
+}
+
+/// The missed-call alert for a call a VoWiFi or VoLTE agent never got
+/// answered. The circuit-switched worker raises its own (`modules::worker`)
+/// and never reports through here, so no call is alerted twice. One-shot, like
+/// the circuit-switched one: no recovery notice follows.
+fn missed_call_event(
+    module_id: &str,
+    caller: Option<&str>,
+    phone: Option<String>,
+) -> CriticalEvent {
+    CriticalEvent {
+        category: AlertCategory::MissedCall,
+        unit_id: Some(module_id.to_string()),
+        description: format!(
+            "call from {} was never answered",
+            caller
+                .filter(|c| !c.is_empty())
+                .unwrap_or("an unknown caller")
+        ),
+        phone_number: phone,
+        at: chrono::Utc::now(),
+        kind: CriticalEventKind::Failure,
+    }
+}
+
+fn dispatch_missed_call(module_id: &str, caller: Option<&str>) {
+    let (Some(cfg), Some(client)) = (ALERTS_CONFIG.get(), ALERTS_CLIENT.get()) else {
+        return;
+    };
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!(module_id, "missed-call alert not sent: no async runtime");
+        return;
+    };
+    let phone = ALERTS_PHONE_MAP
+        .get()
+        .and_then(|m| m.get(module_id).cloned());
+    let event = missed_call_event(module_id, caller, phone);
+    let (cfg, client) = (cfg.clone(), client.clone());
+    handle.spawn(async move { crate::alerts::deliver(&client, &cfg, event).await });
 }
 
 /// [`apply_report`] with the alert configuration injected, returning the
@@ -1454,6 +1504,7 @@ fn apply_event(agent: AgentKind, module_id: &str, event: &ObservedEvent) {
         ObservedEvent::CallCompleted {
             status,
             duration_seconds,
+            ..
         } => {
             metrics::CALLS_TOTAL
                 .with_label_values(&[module_id, status.as_str(), transport])
@@ -1725,6 +1776,7 @@ mod tests {
             events: vec![ObservedEvent::CallCompleted {
                 status: CallStatus::Answered,
                 duration_seconds: 3.0,
+                caller: None,
             }],
             dropped: 0,
             details: None,
@@ -1734,6 +1786,43 @@ mod tests {
             .with_label_values(&["test-ingest-calls", "answered", "vowifi"])
             .get();
         assert_eq!(after, before + 1.0);
+    }
+
+    #[test]
+    fn a_missed_call_alert_names_the_caller_or_says_it_is_unknown() {
+        let e = missed_call_event("ec20-33", Some("+919000000001"), None);
+        assert_eq!(e.category, AlertCategory::MissedCall);
+        assert_eq!(e.unit_id.as_deref(), Some("ec20-33"));
+        assert_eq!(e.description, "call from +919000000001 was never answered");
+        assert_eq!(e.kind, CriticalEventKind::Failure);
+        for caller in [None, Some("")] {
+            assert_eq!(
+                missed_call_event("m", caller, None).description,
+                "call from an unknown caller was never answered"
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_completed_event_from_an_older_agent_still_parses() {
+        let old = r#"{"event":"call_completed","status":"missed","duration_seconds":0.0}"#;
+        let parsed: ObservedEvent = serde_json::from_str(old).unwrap();
+        assert_eq!(
+            parsed,
+            ObservedEvent::CallCompleted {
+                status: CallStatus::Missed,
+                duration_seconds: 0.0,
+                caller: None,
+            }
+        );
+        // And an answered call does not grow a field older daemons never saw.
+        let answered = serde_json::to_string(&ObservedEvent::CallCompleted {
+            status: CallStatus::Answered,
+            duration_seconds: 1.0,
+            caller: None,
+        })
+        .unwrap();
+        assert!(!answered.contains("caller"), "{answered}");
     }
 
     #[test]

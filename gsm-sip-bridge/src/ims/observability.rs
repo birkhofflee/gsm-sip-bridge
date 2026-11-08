@@ -414,6 +414,7 @@ impl AgentObservability {
             ObservedEvent::CallCompleted {
                 status,
                 duration_seconds: 0.0,
+                caller: Some(caller.to_string()),
             },
             ObservedEvent::BridgeFailed { reason },
         ]);
@@ -442,6 +443,7 @@ impl AgentObservability {
             self.push(vec![ObservedEvent::CallCompleted {
                 status: CallStatus::Answered,
                 duration_seconds,
+                caller: None,
             }]);
             self.insert_call_row(
                 caller,
@@ -455,6 +457,7 @@ impl AgentObservability {
                 ObservedEvent::CallCompleted {
                     status: CallStatus::Failed,
                     duration_seconds,
+                    caller: None,
                 },
                 ObservedEvent::BridgeFailed {
                     reason: BridgeFailureReason::OneWayAudio,

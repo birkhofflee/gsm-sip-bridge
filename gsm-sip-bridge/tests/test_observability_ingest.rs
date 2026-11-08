@@ -60,6 +60,7 @@ async fn test_observe_report_lands_in_scraped_metrics() {
         events: vec![ObservedEvent::CallCompleted {
             status: CallStatus::Answered,
             duration_seconds: 12.5,
+            caller: None,
         }],
         dropped: 0,
         details: None,

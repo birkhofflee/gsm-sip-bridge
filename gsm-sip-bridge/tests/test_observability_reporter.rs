@@ -57,6 +57,7 @@ async fn test_reports_made_before_the_daemon_exists_are_delivered_once_it_starts
         vec![ObservedEvent::CallCompleted {
             status: CallStatus::Answered,
             duration_seconds: 1.0,
+            caller: None,
         }],
     );
 
@@ -118,6 +119,7 @@ async fn test_repeated_reports_do_not_reset_the_daemon_side_counter() {
             vec![ObservedEvent::CallCompleted {
                 status: CallStatus::Answered,
                 duration_seconds: 2.0,
+                caller: None,
             }],
         );
         wait_for_counter(&counter, generation as f64, Duration::from_secs(5)).await;
