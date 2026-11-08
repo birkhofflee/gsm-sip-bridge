@@ -18,6 +18,76 @@ setup, or a SIP phone. Your PBX can also dial out through the SIM.
 > banned in many countries, and may break your carrier's terms.
 > Read the [disclaimer](DISCLAIMER.md) before you plug anything in.
 
+## About this fork
+
+This fork of [selvakn/gsm-sip-bridge](https://github.com/selvakn/gsm-sip-bridge)
+adds the following on top of upstream `v8.25.0`. Every addition is opt-in or
+keeps upstream's default behaviour unless noted.
+
+| Area | What it adds |
+|---|---|
+| **Telegram** | SMS forwarding to a Telegram chat (`[sms].telegram_bot_token`, `telegram_chat_id`) as an alternative to Discord, with the same retry and late-delivery handling. Critical alerts go to Telegram too, reusing the SMS bot unless `[alerts]` sets its own. |
+| **VoWiFi registration** | `[vowifi].access_network_info` sets the `P-Access-Network-Info` header the bridge sends to the carrier. Some carriers reject the hard-coded `3GPP-WLAN`. |
+| **Keypad (DTMF)** | `[vowifi].offer_telephone_event` adds `telephone-event` to outbound calls, so menu keypresses reach the carrier. |
+| **Flight mode** | `[vowifi].modem_flight_mode` keeps the modem's radio off (`AT+CFUN=4`), at startup and after every SIM recovery. VoWiFi only needs the SIM, and a roaming modem no longer attaches to the visited network. |
+| **Missed-call alert** | Now fires for VoWiFi and VoLTE calls, not only GSM ones. |
+| **Startup** | When auto-discovery finds no line at startup, the bridge keeps retrying instead of running without VoWiFi until restarted. It logs why each modem was turned away, and the health check reports a turned-away modem as unhealthy. |
+| **Web UI** | Shows the line's own number as the network reports it at registration, so it no longer needs `msisdn` in config. |
+| **Nix** | `flake.nix` builds the bridge, PJSIP, the patched strongSwan and `vpcd`. `.#service` runs the whole stack as a systemd unit without Docker, and `nixosModules.default` provides `services.gsm-sip-bridge`. See [Building with Nix](docs/development.md#building-with-nix). |
+
+### Tested on a Quectel EG25-G
+
+Tested on one setup:
+- **Modem:** a Quectel EG25-G, sold as the DJI "Baiwang" 4G module, firmware `QDC507GLEFM21`, with its USB ID set to `2c7c:0125`. The bridge detects it as an EC20.
+- **SIM:** Chunghwa Telecom (Taiwan).
+- **Connection:** VoWiFi, roaming from Italy.
+- **Host:** an aarch64 Ubuntu VM, running both the Docker image and the Nix systemd service.
+
+| Works | Notes |
+|---|---|
+| ePDG tunnel and IMS registration | EAP-AKA over the modem's `AT+CSIM`, including in flight mode |
+| Outbound calls | Two-way audio, with keypad menus |
+| Inbound calls | To [Telephone](https://www.64characters.com/telephone/) on macOS. Linphone Desktop 6.2 registered but never rang; see [Operations](docs/operations.md) |
+| Incoming SMS | Stored, shown in the web UI, and forwarded to Telegram |
+| Missed-call alert | Delivered to Telegram |
+| Recovery | SIM recovery, startup retry when no line is found, and a cold start after a reboot |
+
+Not tested on this setup: GSM voice, VoLTE, outgoing SMS, and the other
+critical alert categories.
+
+### NixOS
+
+```nix
+# flake.nix of the host
+{
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.gsm-sip-bridge.url = "github:birkhofflee/gsm-sip-bridge";
+
+  outputs = { nixpkgs, gsm-sip-bridge, ... }: {
+    nixosConfigurations.bridge = nixpkgs.lib.nixosSystem {
+      system = "aarch64-linux";
+      modules = [
+        ./configuration.nix
+        gsm-sip-bridge.nixosModules.default
+        {
+          services.gsm-sip-bridge = {
+            enable = true;
+            configFile = ./config.toml;   # or `settings = { ... }`
+            environmentFile = "/var/lib/secrets/gsm-sip-bridge.env";
+            openFirewall = true;          # SIP 5060/udp, web UI 8080/tcp, media 4000-4099/udp
+          };
+          networking.modemmanager.enable = false;
+        }
+      ];
+    };
+  };
+}
+```
+
+Keep secrets as `env:VAR` references in the config, with their values in
+`environmentFile`. Anything in `settings` or `configFile` is copied into the
+Nix store, which every user on the host can read.
+
 ## What you need
 
 - **A Linux machine.** Any x86 box or a Raspberry Pi (arm64).
@@ -55,7 +125,7 @@ the one-time modem setup.
 - **SMS** on every path, stored locally and optionally posted to Discord or Telegram.
 - **A read-only web UI** for line health, call history and messages. It also
   shows one-time codes with a copy button.
-- **Alerts** to Discord when a line drops or recovers, plus Prometheus
+- **Alerts** to Discord or Telegram when a line drops or recovers, plus Prometheus
   metrics and a Grafana dashboard.
 - **Recovers by itself** from USB disconnects, lost registrations and stuck
   modems.
