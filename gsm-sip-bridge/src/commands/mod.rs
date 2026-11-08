@@ -42,9 +42,16 @@ pub fn run(cli: &Cli, command: &Commands) -> ExitCode {
         Commands::VowifiImsAgent(args) => vowifi::handle_vowifi_ims_agent_command(cli, args.line),
         Commands::VowifiSipAgent => vowifi::handle_vowifi_sip_agent_command(cli),
         Commands::VowifiStatus => vowifi::handle_vowifi_status_command(cli),
-        Commands::VowifiUsimBridge(args) => {
-            crate::vowifi::usim_bridge::run(&args.modem, &args.vpcd_host, args.vpcd_port)
-        }
+        Commands::VowifiUsimBridge(args) => crate::vowifi::usim_bridge::run(
+            &args.modem,
+            &args.vpcd_host,
+            args.vpcd_port,
+            if args.flight_mode {
+                crate::modules::radio::RadioPolicy::FlightMode
+            } else {
+                crate::modules::radio::RadioPolicy::On
+            },
+        ),
         Commands::VowifiImsi(args) => crate::vowifi::imsi::run(&args.modem),
         Commands::VowifiPlmn(args) => {
             crate::vowifi::plmn::run(args.modem.as_deref(), args.pcsc_imsi.as_deref())

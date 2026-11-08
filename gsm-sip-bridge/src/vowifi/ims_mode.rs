@@ -197,14 +197,67 @@ fn run_inner(modem_port: &Path, host_ims_wanted: bool) -> BridgeResult<()> {
     }
 }
 
-pub fn run(modem_port: &Path, host_ims_wanted: bool) -> ExitCode {
-    match run_inner(modem_port, host_ims_wanted) {
+/// With [`RadioPolicy::FlightMode`], leaves the modem at `AT+CFUN=4` once its
+/// IMS mode is right, including after the reboot a wrong mode costs, which
+/// brings the modem back up with its radio on.
+pub fn run(
+    modem_port: &Path,
+    host_ims_wanted: bool,
+    radio: crate::modules::radio::RadioPolicy,
+) -> ExitCode {
+    match run_inner(modem_port, host_ims_wanted)
+        .and_then(|()| apply_radio_policy(modem_port, radio))
+    {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn apply_radio_policy(
+    modem_port: &Path,
+    radio: crate::modules::radio::RadioPolicy,
+) -> BridgeResult<()> {
+    if radio == crate::modules::radio::RadioPolicy::On {
+        // Unchanged from before the setting existed: a modem left in flight
+        // mode by hand, or by an earlier run with the setting on, stays so
+        // until its next reset.
+        return Ok(());
+    }
+    let mut at = AtCommander::open(modem_port)?;
+    set_radio(&mut at, radio)?;
+    tracing::info!(
+        cfun = radio.cfun_level(),
+        "modem radio off (flight mode); SIM stays powered"
+    );
+    Ok(())
+}
+
+/// Sets the modem to `radio`'s `AT+CFUN` level and confirms it took.
+fn set_radio(at: &mut AtCommander, radio: crate::modules::radio::RadioPolicy) -> BridgeResult<()> {
+    let want = radio.cfun_level();
+    if at.query_cfun()? != want {
+        match at.send_command(radio.cfun_command())? {
+            crate::modules::at_commander::AtResponse::Ok(_) => {}
+            crate::modules::at_commander::AtResponse::Error(e)
+            | crate::modules::at_commander::AtResponse::CmeError(_, e) => {
+                return Err(BridgeError::Discovery(format!(
+                    "{} refused: {e}",
+                    radio.cfun_command()
+                )))
+            }
+        }
+    }
+    let got = at.query_cfun()?;
+    if got != want {
+        return Err(BridgeError::Discovery(format!(
+            "modem reports +CFUN: {got} after {}",
+            radio.cfun_command()
+        )));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -301,5 +354,27 @@ mod tests {
     fn firmware_without_an_ims_stack_is_an_error_not_a_silent_pass() {
         let mut at = at("ERROR\r\n");
         assert!(reconcile(&mut at, IMS_DISABLED).is_err());
+    }
+
+    #[test]
+    fn flight_mode_moves_a_radio_on_modem_to_cfun_4_and_confirms_it() {
+        let mut at = at("+CFUN: 1\r\nOK\r\nOK\r\n+CFUN: 4\r\nOK\r\n");
+        set_radio(&mut at, crate::modules::radio::RadioPolicy::FlightMode).unwrap();
+    }
+
+    #[test]
+    fn flight_mode_leaves_a_modem_already_at_cfun_4_alone() {
+        // Two queries and no set: the second +CFUN line is the confirmation.
+        let mut at = at("+CFUN: 4\r\nOK\r\n+CFUN: 4\r\nOK\r\n");
+        set_radio(&mut at, crate::modules::radio::RadioPolicy::FlightMode).unwrap();
+    }
+
+    #[test]
+    fn a_modem_that_does_not_reach_flight_mode_is_an_error() {
+        let mut at = at("+CFUN: 1\r\nOK\r\nOK\r\n+CFUN: 1\r\nOK\r\n");
+        let err = set_radio(&mut at, crate::modules::radio::RadioPolicy::FlightMode)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("+CFUN: 1"), "{err}");
     }
 }

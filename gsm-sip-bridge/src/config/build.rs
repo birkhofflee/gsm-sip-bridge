@@ -1068,6 +1068,7 @@ fn build_vowifi(raw: RawVowifi) -> BridgeResult<VowifiConfig> {
             value.to_string()
         },
         offer_telephone_event: raw.offer_telephone_event,
+        modem_flight_mode: raw.modem_flight_mode,
         gm_auth_alg: {
             const OK: [&str; 3] = ["", "hmac-sha-1-96", "hmac-md5-96"];
             if !OK.contains(&raw.gm_auth_alg.as_str()) {
@@ -1523,6 +1524,8 @@ pub fn build(raw: RawConfig) -> BridgeResult<AppConfig> {
     let metrics = build_metrics(raw.metrics)?;
     let webui = build_webui(raw.webui)?;
     check_webui_port_clash(&webui, &metrics, &sip, &sip_server)?;
+    let cs = build_cs(raw.cs);
+    check_flight_mode(&vowifi, &volte, &cs)?;
     Ok(AppConfig {
         sip,
         bridge: build_bridge(raw.bridge, &sip_server)?,
@@ -1541,7 +1544,32 @@ pub fn build(raw: RawConfig) -> BridgeResult<AppConfig> {
         alerts,
         sip_server,
         outbound: build_outbound(raw.outbound)?,
-        cs: build_cs(raw.cs),
+        cs,
         discovery: build_discovery(raw.discovery),
     })
+}
+
+/// Flight mode switches the radio off on every modem the bridge cycles, so it
+/// cannot coexist with a path that needs the radio.
+fn check_flight_mode(
+    vowifi: &VowifiConfig,
+    volte: &VolteConfig,
+    cs: &CsConfig,
+) -> BridgeResult<()> {
+    if !vowifi.modem_flight_mode {
+        return Ok(());
+    }
+    if !vowifi.enabled {
+        return Err(BridgeError::Config(
+            "vowifi.modem_flight_mode needs [vowifi].enabled = true".into(),
+        ));
+    }
+    if cs.enabled || volte.enabled {
+        return Err(BridgeError::Config(
+            "vowifi.modem_flight_mode keeps the modem's radio off, so it needs \
+             [cs].enabled = false and [volte].enabled = false"
+                .into(),
+        ));
+    }
+    Ok(())
 }

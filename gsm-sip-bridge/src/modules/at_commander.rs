@@ -962,6 +962,22 @@ impl AtCommander {
         }
     }
 
+    /// The modem's current `AT+CFUN` level (`+CFUN: <fun>`).
+    pub fn query_cfun(&mut self) -> BridgeResult<u8> {
+        match self.send_command("AT+CFUN?")? {
+            AtResponse::Ok(lines) => lines
+                .iter()
+                .find_map(|l| l.trim().strip_prefix("+CFUN:"))
+                .and_then(|v| v.split(',').next()?.trim().parse().ok())
+                .ok_or_else(|| {
+                    BridgeError::Discovery("AT+CFUN?: no +CFUN line in response".into())
+                }),
+            AtResponse::Error(e) | AtResponse::CmeError(_, e) => {
+                Err(BridgeError::Discovery(format!("AT+CFUN? failed: {e}")))
+            }
+        }
+    }
+
     /// Sets `<ims_conf>`. The modem only applies it after a reboot
     /// (`AT+CFUN=1,1`) and persists it across power cycles, so the caller
     /// owns both the reboot and the re-verification — see
@@ -1334,5 +1350,14 @@ mod tests {
     fn test_query_network_type_edge_keyword() {
         let mut at = make_commander("+QNWINFO: \"EDGE\",\"46001\",\"GSM 900\",80\r\nOK\r\n");
         assert_eq!(at.query_network_type().unwrap(), NetworkType::TwoGEdge);
+    }
+
+    #[test]
+    fn query_cfun_reads_the_level() {
+        assert_eq!(
+            make_commander("+CFUN: 4\r\nOK\r\n").query_cfun().unwrap(),
+            4
+        );
+        assert!(make_commander("OK\r\n").query_cfun().is_err());
     }
 }

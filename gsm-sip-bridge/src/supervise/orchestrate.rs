@@ -1776,6 +1776,7 @@ pub(super) fn establish_line_tunnel(
         let modem = modem.clone();
         let vpcd_host = config.vowifi.vpcd_host.clone();
         let vpcd_port = line.vpcd_port;
+        let usim_flight_mode = config.vowifi.modem_flight_mode;
         let usim_holder = Arc::clone(&usim_holder);
         let started = Arc::clone(started);
         let shutting_down = Arc::clone(shutting_down);
@@ -1799,7 +1800,8 @@ pub(super) fn establish_line_tunnel(
             if real_guard.as_deref().is_some_and(|v| *v) {
                 return;
             }
-            match runner.spawn(ChildSpec::new([
+            let vpcd_port_arg = vpcd_port.to_string();
+            let mut argv = vec![
                 bin.as_str(),
                 "--config",
                 config_path.as_str(),
@@ -1809,8 +1811,12 @@ pub(super) fn establish_line_tunnel(
                 "--vpcd-host",
                 vpcd_host.as_str(),
                 "--vpcd-port",
-                &vpcd_port.to_string(),
-            ])) {
+                vpcd_port_arg.as_str(),
+            ];
+            if usim_flight_mode {
+                argv.push("--flight-mode");
+            }
+            match runner.spawn(ChildSpec::new(argv)) {
                 Ok(h) => {
                     let h = Arc::new(h);
                     *usim_holder.lock().unwrap() = Some(h.clone());
@@ -3155,6 +3161,7 @@ fn start_line_tail(
         let shutting_down = Arc::clone(shutting_down);
         let rebuild_gate = Arc::clone(&rebuild_gate);
         let clear_gm_state = should_clear_gm_state(&ctx.config.vowifi.tunnel_engine);
+        let radio = crate::modules::radio::RadioPolicy::from_config(ctx.config);
         let alert_ctx = alert_ctx.cloned();
         let line_id = line.card_id.clone();
         // specs/034-alert-identity: resolve this line's number before the
@@ -3298,6 +3305,7 @@ fn start_line_tail(
                         Path::new(&modem),
                         &reset_log,
                         holder.as_deref(),
+                        radio,
                     );
                 }
                 if action == sim_recovery::Action::GiveUpForThisIncident {

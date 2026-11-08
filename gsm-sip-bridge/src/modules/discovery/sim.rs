@@ -45,8 +45,11 @@ pub enum SimStatus {
 pub enum SimRecovery {
     /// Observe and report `SimStatus::Unreadable`; never touch the radio.
     Disabled,
-    /// On `Unreadable`, attempt one `AT+CFUN` cycle and re-probe.
-    CfunCycleOnUnreadable,
+    /// On `Unreadable`, attempt one `AT+CFUN` cycle and re-probe, bringing
+    /// the radio back to `radio`'s level.
+    CfunCycleOnUnreadable {
+        radio: crate::modules::radio::RadioPolicy,
+    },
 }
 
 /// The result of the bounded SIM-status open, carrying the still-open
@@ -126,8 +129,8 @@ pub(super) fn probe_sim_status_at(
         }
     };
 
-    if sim_recovery == SimRecovery::CfunCycleOnUnreadable
-        && matches!(status, SimStatus::Unreadable(_))
+    if let (SimRecovery::CfunCycleOnUnreadable { radio }, SimStatus::Unreadable(_)) =
+        (sim_recovery, &status)
     {
         tracing::warn!(
             port = %device_path.display(),
@@ -136,6 +139,7 @@ pub(super) fn probe_sim_status_at(
         );
         recover_and_reprobe_sim(
             &mut at,
+            radio,
             crate::supervise::sim_recovery::CFUN_CYCLE_DELAY,
             crate::supervise::sim_recovery::CPIN_POLL_INTERVAL,
             crate::supervise::sim_recovery::CPIN_POLL_ATTEMPTS,
@@ -146,7 +150,7 @@ pub(super) fn probe_sim_status_at(
 }
 
 /// After a first-probe `Unreadable` result, power-cycles the SIM in place
-/// (`AT+CFUN=0` -> `AT+CFUN=1`) and re-probes once — the same recipe as
+/// (`AT+CFUN=0`, then back to the radio policy's level) and re-probes once — the same recipe as
 /// `supervise::sim_recovery::reset_modem_sim`/`vowifi::usim_bridge`'s
 /// `reset_sim_in_place` (see either's doc comment for the sugam incident
 /// this traces back to), driven directly over the `AtCommander` this probe
@@ -164,13 +168,15 @@ pub(super) fn probe_sim_status_at(
 /// the same real AT-command sequence with near-zero delays.
 fn recover_and_reprobe_sim(
     at: &mut AtCommander,
+    radio: crate::modules::radio::RadioPolicy,
     cycle_delay: Duration,
     poll_interval: Duration,
     poll_attempts: u32,
 ) -> SimStatus {
-    let _ = at.send_command("AT+CFUN=0");
+    let [down, up] = radio.sim_power_cycle();
+    let _ = at.send_command(down);
     std::thread::sleep(cycle_delay);
-    let _ = at.send_command("AT+CFUN=1");
+    let _ = at.send_command(up);
 
     for _ in 0..poll_attempts {
         std::thread::sleep(poll_interval);
@@ -269,6 +275,7 @@ mod tests {
         ]);
         let status = recover_and_reprobe_sim(
             &mut at,
+            crate::modules::radio::RadioPolicy::On,
             Duration::from_millis(1),
             Duration::from_millis(1),
             1,
@@ -294,6 +301,7 @@ mod tests {
         ]);
         let status = recover_and_reprobe_sim(
             &mut at,
+            crate::modules::radio::RadioPolicy::On,
             Duration::from_millis(1),
             Duration::from_millis(1),
             1,

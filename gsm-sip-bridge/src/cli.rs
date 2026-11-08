@@ -757,6 +757,12 @@ pub struct VowifiUsimBridgeArgs {
     /// port before pcscd binds it, and the reader then fails to come up.
     #[arg(long, default_value_t = 15963)]
     pub vpcd_port: u16,
+
+    /// Return the modem to flight mode (`AT+CFUN=4`), not full
+    /// functionality, after power-cycling an unresponsive SIM. Passed by
+    /// `supervise` when `[vowifi].modem_flight_mode` is set.
+    #[arg(long)]
+    pub flight_mode: bool,
 }
 
 #[derive(Parser, Debug)]

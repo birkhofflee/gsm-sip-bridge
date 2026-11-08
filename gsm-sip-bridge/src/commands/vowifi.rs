@@ -121,5 +121,9 @@ pub(crate) fn handle_modem_ims_command(args: &crate::cli::ModemImsArgs, cli: &Cl
     // `config.vowifi.enabled` alone, which left a VoLTE-only deployment's
     // modem fighting our registration with its own internal one).
     let host_ims_wanted = config.vowifi.enabled || config.volte.enabled;
-    crate::vowifi::ims_mode::run(&args.modem, host_ims_wanted)
+    crate::vowifi::ims_mode::run(
+        &args.modem,
+        host_ims_wanted,
+        crate::modules::radio::RadioPolicy::from_config(&config),
+    )
 }

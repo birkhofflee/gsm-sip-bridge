@@ -322,6 +322,14 @@ access_network_info = "3GPP-WLAN"
 # the phone reach the carrier. Off by default: without it the carrier leg has
 # no event payload type and keypresses on outbound calls are discarded.
 offer_telephone_event = false
+# Keep the modem in flight mode (AT+CFUN=4: radio off, SIM on). VoWiFi needs
+# only the SIM: the tunnel and IMS use the host's network. With the radio on,
+# a roaming modem attaches to the visited network, keeps a data context there,
+# and can be paged when a call is not delivered over VoWiFi. Set at startup and
+# after every SIM power cycle the bridge does. Needs [cs] and [volte] off. A
+# modem reset the bridge does not make (power loss) brings the radio back on
+# until the next start.
+modem_flight_mode = false
 # Pin the Gm IPsec algorithms rather than following the P-CSCF's own q= order.
 # Leave empty (the default) to follow it. Set these only when a network
 # advertises a preference it does not actually use — the symptom is a

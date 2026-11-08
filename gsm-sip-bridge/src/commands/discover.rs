@@ -120,7 +120,9 @@ pub fn scan_for_line_resolution(
     let mut policy = crate::modules::discovery::DiscoveryPolicy::new(config.discovery.clone());
     crate::modules::discovery::scan_all_preferring_with_sim_recovery(
         &preferred_ports,
-        crate::modules::discovery::SimRecovery::CfunCycleOnUnreadable,
+        crate::modules::discovery::SimRecovery::CfunCycleOnUnreadable {
+            radio: crate::modules::radio::RadioPolicy::from_config(config),
+        },
         &mut policy,
     )
     .map_err(|e| format!("modem discovery failed: {e}"))

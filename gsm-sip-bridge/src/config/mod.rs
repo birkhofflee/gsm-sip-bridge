@@ -954,6 +954,12 @@ pub struct VowifiConfig {
     /// leg negotiates no event payload type and the relay discards them. Off by
     /// default so existing deployments keep sending the same offer.
     pub offer_telephone_event: bool,
+    /// Keep the modem in flight mode (`AT+CFUN=4`: radio off, SIM on): set at
+    /// startup, and the level every SIM power cycle returns to. VoWiFi needs
+    /// only the SIM, and a modem attached to a visited network can be paged
+    /// for calls and carries a data context there. Requires `[cs]` and
+    /// `[volte]` off, which need the radio. See `modules::radio`.
+    pub modem_flight_mode: bool,
     /// Pin the Gm IPsec auth/cipher algorithm rather than taking the P-CSCF's
     /// highest-`q` offer. Empty = follow the network's preference. Needed when
     /// a P-CSCF advertises a preference it does not actually use, which shows
@@ -1305,6 +1311,7 @@ impl Default for VowifiConfig {
             register_request_uri: "home-domain".to_string(),
             access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
             offer_telephone_event: false,
+            modem_flight_mode: false,
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,
@@ -2941,6 +2948,26 @@ password = "pass"
             let lines = format!("telegram_bot_token = \"{TOKEN}\"\ntelegram_chat_id = \"{bad}\"\n");
             let err = sms_config(&lines).unwrap_err();
             assert!(err.contains("telegram_chat_id"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn modem_flight_mode_is_opt_in_and_needs_the_radio_paths_off() {
+        assert!(!parse(MINIMAL_TOML).vowifi.modem_flight_mode);
+        let ok = format!(
+            "{MINIMAL_TOML}\n[cs]\nenabled = false\n[vowifi]\nenabled = true\nmodem_flight_mode = true\n"
+        );
+        assert!(parse(&ok).vowifi.modem_flight_mode);
+        for bad in [
+            // [cs] defaults to enabled.
+            "[vowifi]\nenabled = true\nmodem_flight_mode = true\n",
+            "[cs]\nenabled = false\n[vowifi]\nmodem_flight_mode = true\n",
+        ] {
+            let err = try_parse(&format!("{MINIMAL_TOML}\n{bad}"))
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("modem_flight_mode"), "{bad}: {err}");
         }
     }
 

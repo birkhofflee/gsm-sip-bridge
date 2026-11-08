@@ -450,6 +450,8 @@ section! {
         /// Offer `telephone-event` on outbound calls. See
         /// `VowifiConfig::offer_telephone_event`.
         pub offer_telephone_event: bool,
+        /// Keep the modem's radio off. See `VowifiConfig::modem_flight_mode`.
+        pub modem_flight_mode: bool,
         /// Pin the Gm IPsec algorithms instead of following the network's own
         /// `q=` preference. Empty string = follow it. See
         /// `ims::gm_ipsec::select_security_server`.
@@ -532,6 +534,7 @@ impl Default for RawVowifi {
             register_request_uri: "home-domain".to_string(),
             access_network_info: crate::ims::ACCESS_NETWORK_WLAN.to_string(),
             offer_telephone_event: false,
+            modem_flight_mode: false,
             gm_auth_alg: String::new(),
             gm_cipher_alg: String::new(),
             respond_on_client: false,

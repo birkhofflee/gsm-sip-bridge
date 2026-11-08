@@ -230,13 +230,15 @@ fn try_open_with_backoff(
 /// constants (see `Session::new`).
 fn reset_sim_in_place(
     at: &mut AtCommander,
+    radio: crate::modules::radio::RadioPolicy,
     cycle_delay: Duration,
     poll_interval: Duration,
     poll_attempts: u32,
 ) -> bool {
-    let _ = at.send_command("AT+CFUN=0");
+    let [down, up] = radio.sim_power_cycle();
+    let _ = at.send_command(down);
     std::thread::sleep(cycle_delay);
-    let _ = at.send_command("AT+CFUN=1");
+    let _ = at.send_command(up);
 
     for _ in 0..poll_attempts {
         std::thread::sleep(poll_interval);
@@ -281,12 +283,15 @@ struct Session {
     cfun_cycle_delay: Duration,
     cpin_poll_interval: Duration,
     cpin_poll_attempts: u32,
+    /// The level a SIM power cycle returns the radio to.
+    radio: crate::modules::radio::RadioPolicy,
 }
 
 impl Session {
-    fn new() -> Self {
+    fn new(radio: crate::modules::radio::RadioPolicy) -> Self {
         Self {
             state: SessionState::Unpowered,
+            radio,
             csim_fails: IncidentCounters::default(),
             cfun_cycle_delay: sim_recovery::CFUN_CYCLE_DELAY,
             cpin_poll_interval: sim_recovery::CPIN_POLL_INTERVAL,
@@ -434,10 +439,11 @@ impl Session {
                 match self.csim_fails.observe(outcome) {
                     Action::ResetSim => {
                         tracing::warn!(
-                            "consecutive AT+CSIM failures; power-cycling the SIM (AT+CFUN=0 -> 1)"
+                            "consecutive AT+CSIM failures; power-cycling the SIM (AT+CFUN=0, then back up)"
                         );
                         if reset_sim_in_place(
                             serial,
+                            self.radio,
                             self.cfun_cycle_delay,
                             self.cpin_poll_interval,
                             self.cpin_poll_attempts,
@@ -474,12 +480,16 @@ impl Session {
 /// `TcpStream` in production, an in-process socket pair in tests) and over
 /// how a fresh `AtCommander` is obtained (`open_modem`, real
 /// `AtCommander::open` in production, a scripted transport in tests).
-fn serve_vpcd_session<S, F>(mut stream: S, mut open_modem: F) -> BridgeResult<()>
+fn serve_vpcd_session<S, F>(
+    mut stream: S,
+    radio: crate::modules::radio::RadioPolicy,
+    mut open_modem: F,
+) -> BridgeResult<()>
 where
     S: Read + Write,
     F: FnMut() -> BridgeResult<AtCommander>,
 {
-    let mut session = Session::new();
+    let mut session = Session::new(radio);
     loop {
         let payload = match read_frame(&mut stream) {
             Ok(Some(p)) => p,
@@ -516,7 +526,12 @@ where
 /// `vowifi-sip-agent`) rather than duplicated here — vpcd/pcscd is a local,
 /// supervised daemon, not a flaky remote peer, so this duty cycle is
 /// adequate and keeps this process's own logic simple.
-pub fn run(modem_port: &Path, vpcd_host: &str, vpcd_port: u16) -> ExitCode {
+pub fn run(
+    modem_port: &Path,
+    vpcd_host: &str,
+    vpcd_port: u16,
+    radio: crate::modules::radio::RadioPolicy,
+) -> ExitCode {
     let addr = format!("{vpcd_host}:{vpcd_port}");
     let stream = match TcpStream::connect(&addr) {
         Ok(s) => s,
@@ -528,7 +543,7 @@ pub fn run(modem_port: &Path, vpcd_host: &str, vpcd_port: u16) -> ExitCode {
     tracing::info!(addr = %addr, "connected to vpcd");
 
     let modem_port = modem_port.to_path_buf();
-    match serve_vpcd_session(stream, || AtCommander::open(&modem_port)) {
+    match serve_vpcd_session(stream, radio, || AtCommander::open(&modem_port)) {
         Ok(()) => {
             tracing::info!("vpcd session ended cleanly");
             ExitCode::SUCCESS
@@ -712,12 +727,16 @@ mod tests {
             &responses.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
 
-        let result = serve_vpcd_session(server_stream, move || {
-            modem
-                .take()
-                .map(|m| AtCommander::from_stream(m, Duration::from_secs(1)))
-                .ok_or_else(|| BridgeError::Ims("modem already opened once".into()))
-        });
+        let result = serve_vpcd_session(
+            server_stream,
+            crate::modules::radio::RadioPolicy::On,
+            move || {
+                modem
+                    .take()
+                    .map(|m| AtCommander::from_stream(m, Duration::from_secs(1)))
+                    .ok_or_else(|| BridgeError::Ims("modem already opened once".into()))
+            },
+        );
 
         client.join().unwrap();
         assert!(result.is_ok(), "session ended with error: {result:?}");
@@ -742,12 +761,16 @@ mod tests {
         let mut modem = Some(ScriptedModem::new(
             &responses.iter().map(String::as_str).collect::<Vec<_>>(),
         ));
-        let result = serve_vpcd_session(server_stream, move || {
-            modem
-                .take()
-                .map(|m| AtCommander::from_stream(m, Duration::from_secs(1)))
-                .ok_or_else(|| BridgeError::Ims("modem already opened once".into()))
-        });
+        let result = serve_vpcd_session(
+            server_stream,
+            crate::modules::radio::RadioPolicy::On,
+            move || {
+                modem
+                    .take()
+                    .map(|m| AtCommander::from_stream(m, Duration::from_secs(1)))
+                    .ok_or_else(|| BridgeError::Ims("modem already opened once".into()))
+            },
+        );
 
         client.join().unwrap();
         assert!(result.is_ok(), "session ended with error: {result:?}");
@@ -771,7 +794,7 @@ mod tests {
                 aid: Some(vec![0xA0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xFF]),
                 last_response: Some(vec![0x11, 0x22, 0x90, 0x00]),
             },
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
         let resp = session.handle_apdu(&[0x00, 0xC0, 0x00, 0x00, 0x04]);
         assert_eq!(resp, vec![0x11, 0x22, 0x90, 0x00]);
@@ -859,7 +882,7 @@ mod tests {
                 aid: None,
                 last_response: None,
             },
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
         let select_ef_dir = [0x00, 0xA4, 0x08, 0x04, 0x02, 0x2F, 0x00, 0x00];
         let first = session.handle_apdu(&select_ef_dir);
@@ -967,7 +990,7 @@ mod tests {
                 aid: None,
                 last_response: None,
             },
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
         let select_by_path = [0x00, 0xA4, 0x08, 0x04, 0x02, 0x2F, 0x00, 0x00];
         let resp = session.handle_apdu(&select_by_path);
@@ -1000,7 +1023,7 @@ mod tests {
                 aid: None,
                 last_response: None,
             },
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
         // SELECT-by-AID carrying a generic/wrong AID, same RID.
         let generic_aid = [0xA0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02, 0xFF, 0xFF];
@@ -1039,7 +1062,7 @@ mod tests {
 
     #[test]
     fn power_on_failure_mutes_subsequent_apdus_with_card_mute() {
-        let mut session = Session::new();
+        let mut session = Session::new(crate::modules::radio::RadioPolicy::On);
         let mut always_fail =
             || -> BridgeResult<AtCommander> { Err(BridgeError::Ims("port busy".into())) };
         session.power_on(&mut always_fail);
@@ -1050,7 +1073,7 @@ mod tests {
 
     #[test]
     fn handle_apdu_while_unpowered_returns_card_mute() {
-        let mut session = Session::new();
+        let mut session = Session::new(crate::modules::radio::RadioPolicy::On);
         let resp = session.handle_apdu(&[0x00, 0xA4, 0x00, 0x0C]);
         assert_eq!(resp, vec![0x6F, 0x00]);
     }
@@ -1066,7 +1089,7 @@ mod tests {
                 aid: Some(vec![0xA0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02]),
                 last_response: None,
             },
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
         let resp = session.handle_apdu(&[0x00, 0x20, 0x00, 0x00, 0x02, 0x11, 0x22]);
         assert_eq!(resp, vec![0x6F, 0x00]);
@@ -1102,7 +1125,7 @@ mod tests {
             cfun_cycle_delay: Duration::from_millis(1),
             cpin_poll_interval: Duration::from_millis(1),
             cpin_poll_attempts: 1,
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
 
         let apdu = [0x00, 0x20, 0x00, 0x00, 0x02, 0x11, 0x22];
@@ -1152,7 +1175,7 @@ mod tests {
             cfun_cycle_delay: Duration::from_millis(1),
             cpin_poll_interval: Duration::from_millis(1),
             cpin_poll_attempts: 1,
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
 
         let failing_apdu = [0x00, 0x20, 0x00, 0x00, 0x02, 0x11, 0x22];
@@ -1192,7 +1215,7 @@ mod tests {
             cfun_cycle_delay: Duration::from_millis(1),
             cpin_poll_interval: Duration::from_millis(1),
             cpin_poll_attempts: 1,
-            ..Session::new()
+            ..Session::new(crate::modules::radio::RadioPolicy::On)
         };
 
         let apdu = [0x00, 0x20, 0x00, 0x00, 0x02, 0x11, 0x22];

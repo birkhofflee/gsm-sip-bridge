@@ -207,6 +207,7 @@ pub fn reset_modem_sim(
     modem: &Path,
     reset_log: &Path,
     holder: Option<&ChildHandle>,
+    radio: crate::modules::radio::RadioPolicy,
 ) -> bool {
     if let Some(h) = holder {
         runner.signal(h, Signal::Stop);
@@ -229,9 +230,10 @@ pub fn reset_modem_sim(
         .ok();
     runner.sleep(READER_STARTUP_SETTLE);
 
-    let _ = runner.write_file(modem, "AT+CFUN=0\r");
+    let [down, up] = radio.sim_power_cycle();
+    let _ = runner.write_file(modem, &format!("{down}\r"));
     runner.sleep(CFUN_CYCLE_DELAY);
-    let _ = runner.write_file(modem, "AT+CFUN=1\r");
+    let _ = runner.write_file(modem, &format!("{up}\r"));
 
     let mut ready = false;
     for _ in 0..CPIN_POLL_ATTEMPTS {
@@ -443,7 +445,13 @@ mod tests {
             let reset_log = PathBuf::from("/tmp/sim-reset-0.log");
             runner.set_file(&reset_log, "+CPIN: READY\n");
 
-            reset_modem_sim(&runner, &modem, &reset_log, Some(&holder));
+            reset_modem_sim(
+                &runner,
+                &modem,
+                &reset_log,
+                Some(&holder),
+                crate::modules::radio::RadioPolicy::On,
+            );
 
             assert_eq!(
                 runner.signals_for(&holder),
@@ -462,7 +470,13 @@ mod tests {
             let reset_log = PathBuf::from("/tmp/sim-reset-0.log");
             runner.set_file(&reset_log, "+CPIN: READY\n");
 
-            reset_modem_sim(&runner, &modem, &reset_log, None);
+            reset_modem_sim(
+                &runner,
+                &modem,
+                &reset_log,
+                None,
+                crate::modules::radio::RadioPolicy::On,
+            );
 
             // Exactly one child (the reader) is spawned with no holder.
             assert_eq!(runner.spawn_specs.lock().unwrap().len(), 1);
@@ -493,7 +507,13 @@ mod tests {
             // never make an AT command's reply readable back from the same
             // path it was written to.
             runner.set_file(&reset_log, "+CPIN: READY\n");
-            assert!(reset_modem_sim(&runner, &modem, &reset_log, None));
+            assert!(reset_modem_sim(
+                &runner,
+                &modem,
+                &reset_log,
+                None,
+                crate::modules::radio::RadioPolicy::On
+            ));
         }
 
         #[test]
@@ -502,7 +522,13 @@ mod tests {
             let modem = PathBuf::from("/dev/ttyUSB2");
             let reset_log = PathBuf::from("/tmp/sim-reset-0.log");
             runner.set_file(&reset_log, "+CME ERROR: 0\n");
-            assert!(!reset_modem_sim(&runner, &modem, &reset_log, None));
+            assert!(!reset_modem_sim(
+                &runner,
+                &modem,
+                &reset_log,
+                None,
+                crate::modules::radio::RadioPolicy::On
+            ));
         }
 
         #[test]
@@ -511,7 +537,13 @@ mod tests {
             let modem = PathBuf::from("/dev/ttyUSB2");
             let reset_log = PathBuf::from("/tmp/sim-reset-0.log");
             runner.set_file(&reset_log, "+CPIN: READY\n");
-            reset_modem_sim(&runner, &modem, &reset_log, None);
+            reset_modem_sim(
+                &runner,
+                &modem,
+                &reset_log,
+                None,
+                crate::modules::radio::RadioPolicy::On,
+            );
             // Nothing was spawned, so there is nothing to assert signals
             // against — this test's value is that reset_modem_sim doesn't
             // panic/misbehave when `holder` is None (the common case: no
