@@ -1310,6 +1310,15 @@ off.** The bridge answers REGISTER on `listen_port` but dials from
 the one operational cost of the two-port design; see
 [architecture.md](architecture.md#two-sip-side-topologies).
 
+A softphone can also register and still never answer, because it accepts
+requests only from the address and port it registered with. The bridge's
+INVITE to the phone comes from `5072`, not the registrar's `5060`. Observed
+with Linphone Desktop 6.2 on macOS: it registered and placed calls, but
+answered neither an INVITE nor an `OPTIONS` from the bridge, with the macOS
+firewall off. Telephone (macOS), which listens on an ordinary UDP port,
+answered and rang. To check a phone, send it an `OPTIONS` from the bridge host:
+no reply at all, not even an error, points at this.
+
 **`no live registration for AOR "1001"` in the log.** A call arrived with
 nothing registered under the ringing account. The carrier call is deliberately
 left to ring out rather than answered into silence, so the existing missed-call
