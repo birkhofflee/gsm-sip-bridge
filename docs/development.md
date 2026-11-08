@@ -36,10 +36,40 @@ The dev shell is enough for `make lint` and `make test`, and for
 `cargo test -p pjsua-safe --features pjsip-linked` against the project's own
 PJSIP build (see below), so the `config_site.h` caveat there does not apply.
 
-The flake packages the binary only. At runtime, `supervise` still needs what
-the Docker image provides beside it: strongSwan with this project's patches,
-`pcscd` with the `vpcd` reader, and `iproute2`. To deploy VoWiFi, use the
-image.
+### Running the service without Docker
+
+`.#service` runs what `docker/docker-compose.yml`'s `gsm-sip-bridge` service
+runs, as a systemd unit on any systemd host with Nix. The flake also builds
+what the image ships beside the binary: osmocom's `strongswan-epdg` at the
+image's pinned commit with `docker/patches/0002-strongswan-vici-dpd.patch`, and
+vsmartcard's `vpcd` with eight slots, plus `pcscd` and `iproute2` from nixpkgs.
+
+`supervise` expects the image's layout, so the unit mounts it in its own mount
+namespace: charon at `/usr/libexec/ipsec`, the vpcd driver at `/usr/lib/pcsc`,
+and writable `/etc/strongswan.d`, `/etc/swanctl`, `/etc/reader.conf.d`,
+`/etc/strongswan-shared.conf` and `/data` from `/var/lib/gsm-sip-bridge`. It
+gets a private `/tmp`, restarts like the compose service, and has 90s to stop.
+The host itself only gets empty mount points for those paths.
+
+```bash
+nix build .#service
+docker compose -f docker/docker-compose.yml stop gsm-sip-bridge   # frees the modem
+sudo ./result/bin/gsm-sip-bridge-install \
+  --config "$PWD/docker/config.toml" --env-file "$PWD/docker/.env" \
+  --import-docker-data /var/lib/docker/volumes/docker_bridge-data/_data
+sudo systemctl start gsm-sip-bridge
+journalctl -u gsm-sip-bridge -f
+sudo ./result/bin/gsm-sip-bridge-ctl vowifi-status    # runs inside the unit's namespace
+```
+
+`--import-docker-data` copies the compose volume once, into an empty state
+directory. `gsm-sip-bridge-install --uninstall` removes the unit and the empty
+mount points and keeps `/var/lib/gsm-sip-bridge`. The installer also adds a Nix
+GC root, so a garbage collection cannot remove what the unit runs.
+
+Differences from the container: there is no periodic health check (run
+`gsm-sip-bridge-ctl healthcheck`), and the `ims0` namespace is only visible
+inside the unit, so it cannot be cleaned up from the host after a hard kill.
 
 ## Build and run
 

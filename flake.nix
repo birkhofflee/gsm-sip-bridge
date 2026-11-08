@@ -184,9 +184,20 @@
               platforms = lib.platforms.linux;
             };
           };
+          strongswan-epdg = pkgs.callPackage ./nix/strongswan-epdg.nix { };
+          vpcd = pkgs.callPackage ./nix/vpcd.nix { };
+          service = pkgs.callPackage ./nix/service.nix {
+            inherit gsm-sip-bridge strongswan-epdg vpcd;
+          };
         in
         {
-          inherit pjproject gsm-sip-bridge;
+          inherit
+            pjproject
+            gsm-sip-bridge
+            strongswan-epdg
+            vpcd
+            service
+            ;
           default = gsm-sip-bridge;
         }
       );
