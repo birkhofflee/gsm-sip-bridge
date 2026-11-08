@@ -71,6 +71,74 @@ Differences from the container: there is no periodic health check (run
 `gsm-sip-bridge-ctl healthcheck`), and the `ims0` namespace is only visible
 inside the unit, so it cannot be cleaned up from the host after a hard kill.
 
+### On NixOS
+
+`nixosModules.default` declares the same unit as `services.gsm-sip-bridge`.
+The config is either `settings` (Nix, rendered to TOML) or `configFile`;
+secrets stay out of the Nix store as `env:` references, with their values in
+`environmentFile`.
+
+```nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    gsm-sip-bridge.url = "github:birkhofflee/gsm-sip-bridge";
+  };
+
+  outputs = { nixpkgs, gsm-sip-bridge, ... }: {
+    nixosConfigurations.bridge = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        ./configuration.nix
+        gsm-sip-bridge.nixosModules.default
+        {
+          services.gsm-sip-bridge = {
+            enable = true;
+            environmentFile = "/var/lib/secrets/gsm-sip-bridge.env";
+            openFirewall = true;
+            settings = {
+              cs.enabled = false;
+              vowifi = {
+                enabled = true;
+                modem_flight_mode = true;
+              };
+              sip = {
+                transport = "udp";
+                local_port = 5062;
+              };
+              sip_server = {
+                enabled = true;
+                listen_port = 5060;
+                ring_aor = "1001";
+                account = [ { username = "1001"; password = "env:PHONE_1001_PASSWORD"; } ];
+              };
+              outbound.enabled = true;
+              sms = {
+                enabled = true;
+                db_path = "/data/store.db";
+                telegram_bot_token = "env:TELEGRAM_BOT_TOKEN";
+                telegram_chat_id = "env:TELEGRAM_CHAT_ID";
+              };
+              webui = {
+                enabled = true;
+                port = 8080;
+                password = "env:WEBUI_PASSWORD";
+              };
+            };
+          };
+          networking.modemmanager.enable = false;
+        }
+      ];
+    };
+  };
+}
+```
+
+`openFirewall` opens `[sip_server]`'s UDP port, the web UI's TCP port and UDP
+4000-4099 for phone media; keep them on the LAN or a VPN. The module warns when
+ModemManager is on, because it holds the modem's AT ports. Do not also run
+`gsm-sip-bridge-install` on a NixOS host; `gsm-sip-bridge-ctl` is on the path.
+
 ## Build and run
 
 ```bash

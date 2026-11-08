@@ -246,7 +246,21 @@ symlinkJoin {
     install
     ctl
   ];
-  passthru = { inherit etc prepare; };
+  # The unit's pieces, for nix/nixos-module.nix, so the NixOS service and the
+  # installer's unit cannot drift apart.
+  passthru = {
+    inherit
+      etc
+      prepare
+      bin
+      runtimePath
+      stateDir
+      bindPaths
+      bindReadOnlyPaths
+      mountDirs
+      mountFile
+      ;
+  };
   meta = {
     description = "Installer and control wrapper for running gsm-sip-bridge under systemd";
     platforms = lib.platforms.linux;

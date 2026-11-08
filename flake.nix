@@ -202,6 +202,9 @@
         }
       );
 
+      # services.gsm-sip-bridge; see nix/nixos-module.nix and docs/development.md.
+      nixosModules.default = import ./nix/nixos-module.nix self;
+
       devShells = forAllSystems (pkgs: {
         default = pkgs.mkShell {
           inputsFrom = [ self.packages.${pkgs.stdenv.hostPlatform.system}.gsm-sip-bridge ];
