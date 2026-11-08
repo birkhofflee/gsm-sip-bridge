@@ -296,7 +296,13 @@ pub fn assemble(inputs: Inputs<'_>) -> Vec<LineView> {
             transport: if is_volte { "volte" } else { "vowifi" },
             carrier: carrier_side.details.plmn.as_deref().map(carrier_name),
             network: None,
-            msisdn: inputs.phones.get(id).cloned(),
+            // Config names the number when the SIM or registrar cannot;
+            // otherwise the one the network gave at registration.
+            msisdn: inputs
+                .phones
+                .get(id)
+                .cloned()
+                .or_else(|| carrier_side.details.msisdn.clone()),
             registration_state: carrier_side
                 .details
                 .registration_state
@@ -529,6 +535,20 @@ mod tests {
         assert_eq!(l.active_call_count, 1);
         assert_eq!(l.health, "ok");
         assert!(l.carrier.as_deref().unwrap().contains("405-857"));
+    }
+
+    #[test]
+    fn the_number_the_network_gave_shows_unless_config_names_one() {
+        let mut ims = snap(AgentKind::Ims, "card-1");
+        ims.details.msisdn = Some("+919000000001".into());
+
+        let none = HashMap::new();
+        let lines = assemble(inputs(vec![ims.clone()], &none));
+        assert_eq!(lines[0].msisdn.as_deref(), Some("+919000000001"));
+
+        let configured = HashMap::from([("card-1".to_string(), "+919000000000".to_string())]);
+        let lines = assemble(inputs(vec![ims], &configured));
+        assert_eq!(lines[0].msisdn.as_deref(), Some("+919000000000"));
     }
 
     #[test]

@@ -32,6 +32,7 @@ use std::sync::{Arc, Mutex};
 struct DetailsSource {
     status: Mutex<Option<Arc<Mutex<crate::ims::RegistrationStatus>>>>,
     plmn: Mutex<Option<String>>,
+    msisdn: Mutex<Option<String>>,
     signal: Mutex<Option<crate::volte::sms::SignalSlot>>,
     /// Calls reported as plain figures.
     calls: Mutex<Vec<ActiveCallInfoWire>>,
@@ -105,6 +106,11 @@ impl DetailsSource {
             }
         }
         details.plmn = self.plmn.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        details.msisdn = self
+            .msisdn
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let slot = self
             .signal
             .lock()
@@ -226,6 +232,18 @@ impl AgentObservability {
             .status
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(status);
+    }
+
+    /// The line's own number from its latest registration; `None` keeps the
+    /// last one, so a registrar that stops naming it does not blank the line.
+    pub fn set_line_number(&self, number: Option<String>) {
+        if let Some(n) = number {
+            *self
+                .details
+                .msisdn
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(n);
+        }
     }
 
     /// The home network as `"MCC-MNC"`.
@@ -597,6 +615,8 @@ mod tests {
         }));
         obs.attach_registration_status(Arc::clone(&status));
         obs.set_plmn("405", "857");
+        obs.set_line_number(Some("+919000000000".into()));
+        obs.set_line_number(None);
         let slot: crate::volte::sms::SignalSlot =
             Arc::new(crate::volte::sms::SignalShare::default());
         obs.attach_signal_slot(Arc::clone(&slot));
@@ -605,6 +625,11 @@ mod tests {
         assert_eq!(d.registration_state.unwrap().to_string(), "registered");
         assert_eq!(d.registered_at, Some(1_700_000_000));
         assert_eq!(d.plmn.as_deref(), Some("405-857"));
+        assert_eq!(
+            d.msisdn.as_deref(),
+            Some("+919000000000"),
+            "None keeps the last number"
+        );
         assert!(d.signal.is_none(), "nothing read yet");
         assert_eq!(d.active_call_details, Some(vec![]));
 

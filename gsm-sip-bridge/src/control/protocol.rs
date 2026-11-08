@@ -137,6 +137,10 @@ pub struct AgentDetails {
     /// `"MCC-MNC"`, e.g. `"405-857"`.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub plmn: Option<String>,
+    /// The line's own number, as the network named it at registration
+    /// (`ims::RegisteredSession::line_number`). Absent from older agents.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub msisdn: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub signal: Option<SignalReadingWire>,
     /// `Some(vec![])` means "no calls in progress".
@@ -899,6 +903,7 @@ mod tests {
             registration_state: Some(RegistrationStateWire::Renewing),
             registered_at: Some(1_700_000_000),
             plmn: Some("405-857".into()),
+            msisdn: Some("+919000000000".into()),
             signal: Some(SignalReadingWire {
                 at_unix: 1_700_000_100,
                 rssi_dbm: Some(-71),

@@ -368,6 +368,22 @@ pub(crate) struct GmSa {
     pub(crate) security_verify: String,
 }
 
+/// `+` and 6-15 digits from a `sip:+…@host` or `tel:+…` identity, dropping
+/// parameters (TS 23.003 / E.164 bounds). Anything else is not a number.
+pub(crate) fn number_from_identity(identity: &str) -> Option<String> {
+    let rest = identity
+        .strip_prefix("sip:")
+        .or_else(|| identity.strip_prefix("tel:"))
+        .unwrap_or(identity);
+    let user = rest.split(['@', ';', '>']).next()?;
+    let digits = user.strip_prefix('+')?;
+    (6..=15)
+        .contains(&digits.len())
+        .then_some(())
+        .filter(|()| digits.bytes().all(|b| b.is_ascii_digit()))
+        .map(|()| user.to_string())
+}
+
 impl RegisteredSession {
     /// The lifetime the registrar granted this binding, in seconds.
     ///
@@ -403,6 +419,15 @@ impl RegisteredSession {
     /// `Security-Verify` to attach to requests sent over the Gm SA.
     pub(crate) fn security_verify(&self) -> Option<&str> {
         self.gm_state.as_ref().map(|g| g.security_verify.as_str())
+    }
+
+    /// The line's own number, `+` and digits, from the registrar's default
+    /// identity: what a SIM that stores no MSISDN can still tell us. `None`
+    /// when that identity is not a number (an IMSI-based or named one).
+    pub(crate) fn line_number(&self) -> Option<String> {
+        self.default_impu()
+            .as_deref()
+            .and_then(number_from_identity)
     }
 
     /// First `sip:` `P-Associated-URI` from the REGISTER `200 OK`, scheme
@@ -2144,6 +2169,31 @@ mod tests {
         assert!(status.registered_at.is_none());
         assert!(status.expires_at.is_none());
         assert!(status.last_failure.is_none());
+    }
+
+    #[test]
+    fn the_line_number_comes_from_a_numeric_identity_only() {
+        for (identity, want) in [
+            (
+                "sip:+919000000000@ims.mnc092.mcc466.3gppnetwork.org",
+                Some("+919000000000"),
+            ),
+            ("tel:+919000000001", Some("+919000000001")),
+            (
+                "sip:+919000000000;user=phone@ims.example",
+                Some("+919000000000"),
+            ),
+            ("sip:404430000000000@ims.example", None),
+            ("sip:alice@ims.example", None),
+            ("sip:+12@ims.example", None),
+            ("sip:+91900000000x@ims.example", None),
+        ] {
+            assert_eq!(
+                number_from_identity(identity).as_deref(),
+                want,
+                "{identity}"
+            );
+        }
     }
 
     #[test]

@@ -988,6 +988,7 @@ pub(crate) fn serve_inbound(p: InboundParams) -> BridgeResult<()> {
     obs.set_registered(true);
     obs.set_tunnel_up(true);
     obs.set_active_calls(0);
+    obs.set_line_number(session.line_number());
     obs.set_registration_expiry(
         SystemTime::now()
             + Duration::from_secs(session.granted_expires(crate::ims::DEFAULT_EXPIRES) as u64),
@@ -4119,6 +4120,7 @@ impl LoopState {
                     .report_registration_attempt(RegistrationStatus::Success);
                 p.obs.set_registered(true);
                 p.obs.set_tunnel_up(true);
+                p.obs.set_line_number(session.line_number());
                 p.obs.set_registration_expiry(
                     SystemTime::now() + Duration::from_secs(granted as u64),
                 );

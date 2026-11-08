@@ -76,6 +76,7 @@ async fn a_vowifi_line_matches_what_its_agents_reported() {
             ..Default::default()
         },
         Some(AgentDetails {
+            msisdn: None,
             registration_state: Some(RegistrationStateWire::Registered),
             registered_at: Some(1_999_990_000),
             plmn: Some("405-857".into()),

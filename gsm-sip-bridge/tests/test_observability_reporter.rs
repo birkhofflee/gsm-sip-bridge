@@ -165,6 +165,7 @@ async fn test_details_from_the_provider_reach_the_daemons_snapshot() {
         std::time::Duration::from_millis(50),
     );
     reporter.set_details_provider(Arc::new(|| AgentDetails {
+        msisdn: None,
         registration_state: Some(RegistrationStateWire::Registered),
         registered_at: Some(1_700_000_000),
         plmn: Some("405-857".into()),
