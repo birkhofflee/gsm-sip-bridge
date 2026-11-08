@@ -1,5 +1,12 @@
 # Release Notes
 
+<!-- Rename this "## Unreleased" heading to the real "## vX.Y.Z" at release
+     time — publish.yml's notes extractor matches ^## v${TAG}$ exactly, so an
+     "Unreleased" heading is not picked up for the GitHub release. -->
+## Unreleased
+
+- **The Nix build of vpcd works again** -- `nix build .#vpcd`, and so `.#service` and a NixOS host using `nixosModules.default`, failed with a hash mismatch on the vsmartcard source. The pinned hash was for a checkout without git submodules, but Nix's `fetchgit` fetches them by default. vpcd now fetches without them, which matches the pinned hash. They belong to vsmartcard's Android app, ccid and Windows installer, none of which the vpcd build uses. The Docker images are unaffected.
+
 ## v8.25.0
 
 - **Dependency updates** -- PJSIP 2.17 (fixes 14 published security issues; upstream also changes SIP timing: INVITE transactions linger briefly to absorb retransmissions and 200 OK retransmissions are off), Alpine 3.24 for the bridge and cellular-internet sidecar images, Rust 1.99.1, reqwest 0.13, rusqlite 0.41 (SQLite 3.54.1), prometheus 0.14, rand 0.10, toml 1.x, alsa 0.12, bindgen 0.73, and about 100 locked packages refreshed within their version ranges. reqwest now validates HTTPS certificates against the operating system's trust store, so a host running the binary directly needs its system CA bundle present (the Docker image already has it). `store.db` files, `/metrics` output and config parsing are unchanged. The images build and the bridge starts in them, but a live call and tunnel check on a real SIM is still pending for PJSIP and Alpine.

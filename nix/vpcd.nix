@@ -19,6 +19,10 @@ stdenv.mkDerivation (finalAttrs: {
   src = fetchgit {
     url = "https://github.com/frankmorgner/vsmartcard.git";
     rev = "809675dc982addfc3fdb8cbaf177e4430477b0b2";
+    # fetchgit fetches submodules by default. vsmartcard's belong to the
+    # Android app, ccid and the Windows installer, none of which this build
+    # touches, and the hash below is of the checkout without them.
+    fetchSubmodules = false;
     hash = "sha256-I44XrC7v1G9hxaZ9zDlyUVPaSEx5HUAvDRBGsC8DYDs=";
   };
   sourceRoot = "${finalAttrs.src.name}/virtualsmartcard";
