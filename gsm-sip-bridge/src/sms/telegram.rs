@@ -126,7 +126,7 @@ fn render_alert(event: &CriticalEvent, instance: &str) -> String {
     tail.push_str(&format!(
         " · Phone: {}\n{}\ngsm-sip-bridge · {instance}",
         phone_field(event.phone_number.as_deref()),
-        event.at.to_rfc3339(),
+        event.at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     ));
     let used = head.encode_utf16().count() + tail.encode_utf16().count();
     let description = truncate_utf16(&event.description, MAX_TEXT_LEN.saturating_sub(used));
@@ -152,13 +152,24 @@ fn render_text(
         .unwrap_or(crate::alerts::UNKNOWN_IDENTITY);
     let mut tail = format!("\n\nLine: {module_id} · Phone: {phone}");
     if late {
-        tail.push_str(&format!("\nOriginally received: {timestamp}"));
+        tail.push_str(&format!(
+            "\nOriginally received: {}",
+            whole_seconds(timestamp)
+        ));
     }
     tail.push_str(&format!("\ngsm-sip-bridge · {instance}"));
 
     let used = head.encode_utf16().count() + tail.encode_utf16().count();
     let body = truncate_utf16(body, MAX_TEXT_LEN.saturating_sub(used));
     format!("{head}{body}{tail}")
+}
+
+/// An RFC 3339 time without fractional seconds, for reading on a phone.
+/// Anything that does not parse is shown as it is.
+fn whole_seconds(timestamp: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_else(|_| timestamp.to_string())
 }
 
 /// `s` cut to at most `max` UTF-16 code units, ending in `…` when cut. Never
@@ -246,6 +257,45 @@ mod tests {
             text.contains("Originally received: 2026-01-02T03:04:05Z"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn times_are_shown_to_the_second() {
+        assert_eq!(
+            whole_seconds("2026-11-08T00:51:26.479193+00:00"),
+            "2026-11-08T00:51:26Z"
+        );
+        assert_eq!(
+            whole_seconds("2026-11-08T08:51:26.5+08:00"),
+            "2026-11-08T08:51:26+08:00"
+        );
+        assert_eq!(whole_seconds("not a time"), "not a time");
+        let late = render_text(
+            "m",
+            "s",
+            "b",
+            "2026-11-08T00:51:26.479193Z",
+            None,
+            true,
+            "i",
+        );
+        assert!(
+            late.contains("Originally received: 2026-11-08T00:51:26Z"),
+            "{late}"
+        );
+
+        let event = CriticalEvent {
+            category: crate::alerts::AlertCategory::MissedCall,
+            unit_id: None,
+            description: "d".into(),
+            phone_number: None,
+            at: chrono::DateTime::parse_from_rfc3339("2026-11-08T00:51:26.479193Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            kind: CriticalEventKind::Failure,
+        };
+        let text = render_alert(&event, "i");
+        assert!(text.contains("\n2026-11-08T00:51:26Z\n"), "{text}");
     }
 
     #[test]
